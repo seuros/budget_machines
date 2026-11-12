@@ -1,0 +1,61 @@
+module BudgetMachines
+  VERSION: String
+  CAPACITY: Integer
+  MILLI: Integer
+
+  type standing = :no_data | :within | :exhausted
+  type state = :no_data | :quiet | :firing
+  type sample = [Integer, Integer]?
+
+  def self.burn_milli: (Integer good, Integer per, Integer window_good, Integer window_total) -> Integer?
+  def self.allowance: (Integer good, Integer per, Integer total) -> Integer
+
+  class Account < Data
+    attr_reader period: Integer
+    attr_reader good: Integer
+    attr_reader total: Integer
+    attr_reader base: Integer
+    attr_reader allowance: Integer
+    attr_reader standing: standing
+    attr_reader remaining: Integer
+    attr_reader overspent: Integer
+    attr_reader consumed_milli: Integer?
+    def bad: () -> Integer
+    def no_data?: () -> bool
+    def exhausted?: () -> bool
+  end
+
+  class Decision < Data
+    attr_reader state: state
+    attr_reader change: (:raised | :cleared)?
+    attr_reader measured: bool
+    attr_reader long_milli: Integer?
+    attr_reader short_milli: Integer?
+    attr_reader since: Integer?
+    def firing?: () -> bool
+    def no_data?: () -> bool
+  end
+
+  class Ledger
+    def self.new: (Integer good, Integer per, Integer period) -> Ledger
+    def period: () -> Integer
+    def good: () -> Integer
+    def total: () -> Integer
+    def record: (Integer period, Integer good, Integer total) -> (:ok | :stale_period | :overflow)
+    def replace: (Integer period, Integer good, Integer total) -> (:ok | :stale_period)
+    def roll: (Integer period) -> (Account | :stale_period)
+    def account: () -> Account
+    def account_against: (Integer planned_total) -> (Account | :below_observed)
+  end
+
+  class Monitor
+    def self.new: (Integer good, Integer per, ?on_no_data: :hold | :reset | :fire, ?min_total: Integer) -> Monitor
+    def add_rule: (Integer fire_milli, Integer clear_milli, Integer severity) -> (Integer | :full)
+    def evaluate: (Integer now, Array[[sample, sample]] windows) -> (Array[Decision] | :time_regression | :shape)
+    def states: () -> Array[state]
+    def worst: () -> Integer?
+    def last: () -> Integer?
+    def size: () -> Integer
+    def capacity: () -> Integer
+  end
+end

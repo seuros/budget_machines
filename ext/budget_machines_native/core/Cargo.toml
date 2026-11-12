@@ -1,0 +1,14 @@
+[package]
+name = "budget-machines"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "SLO error-budget accounting and multi-window burn-rate alert decisions from supplied counts"
+readme = "README.md"
+exclude = ["src/**/tests.rs", "src/tests/", "tests/"]
+keywords = ["slo", "error-budget", "burn-rate", "alerting", "no-std"]
+categories = ["no-std", "algorithms"]
+
+[lints]
+workspace = true
