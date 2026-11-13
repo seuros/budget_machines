@@ -2,14 +2,12 @@
 use std::cell::RefCell;
 
 use budget_machines::{Change, Decision, OnNoData, Rule, Sample, State, Windows};
-use magnus::{
-    Error, RArray, RHash, Ruby, Symbol, Value,
-    prelude::*,
-    scan_args::{get_kwargs, scan_args},
-    typed_data::Obj,
-};
+use magnus::{Error, Integer, RArray, Ruby, Symbol, Value, prelude::*, typed_data::Obj};
 
-use crate::{CAPACITY, Number, Small, counts, data_class, objective, refusal};
+use crate::{
+    CAPACITY, Nanos, Number, Small, counts, data, expect, nanos, objective, objective_value,
+    refusal,
+};
 
 #[magnus::wrap(class = "BudgetMachines::Monitor", free_immediately, size)]
 pub struct Monitor {
@@ -28,102 +26,113 @@ fn type_error(ruby: &Ruby, message: &'static str) -> Error {
     Error::new(ruby.exception_type_error(), message)
 }
 
+/// A window reading: `:no_data`, or a `Sample::Counts` wrapping a `Counts`.
 fn sample(ruby: &Ruby, value: Value) -> Result<Sample, Error> {
-    if value.is_nil() {
-        return Ok(Sample::NoData);
+    const MESSAGE: &str = "a window reading is :no_data or a BudgetMachines::Sample::Counts";
+    if let Some(symbol) = Symbol::from_value(value) {
+        return match symbol.name()?.as_ref() {
+            "no_data" => Ok(Sample::NoData),
+            _ => Err(type_error(ruby, MESSAGE)),
+        };
     }
-    let pair = RArray::from_value(value)
-        .filter(|pair| pair.len() == 2)
-        .ok_or_else(|| type_error(ruby, "a window is nil or [good, total]"))?;
-    let (good, total): (Number, Number) = (pair.entry(0)?, pair.entry(1)?);
-    counts(ruby, good, total).map(Sample::Counts)
+    expect(ruby, value, "Sample::Counts", MESSAGE)?;
+    counts(ruby, value.funcall("counts", ())?).map(Sample::Counts)
 }
 
 fn windows(ruby: &Ruby, value: Value) -> Result<Vec<Windows>, Error> {
     let rows = RArray::from_value(value)
-        .ok_or_else(|| type_error(ruby, "windows must be an Array of [long, short] pairs"))?;
+        .ok_or_else(|| type_error(ruby, "windows must be an Array of Windows"))?;
     let mut parsed = Vec::with_capacity(rows.len());
     for index in 0..rows.len() {
-        let row = isize::try_from(index)
-            .ok()
-            .and_then(|index| rows.entry::<Value>(index).ok())
-            .and_then(RArray::from_value)
-            .filter(|row| row.len() == 2)
-            .ok_or_else(|| type_error(ruby, "each rule needs a [long, short] pair"))?;
+        let row: Value = isize::try_from(index)
+            .map_err(|_| type_error(ruby, "too many windows"))
+            .and_then(|index| rows.entry(index))?;
+        expect(
+            ruby,
+            row,
+            "Windows",
+            "each rule needs a BudgetMachines::Windows",
+        )?;
         parsed.push(Windows {
-            long: sample(ruby, row.entry(0)?)?,
-            short: sample(ruby, row.entry(1)?)?,
+            long: sample(ruby, row.funcall("long", ())?)?,
+            short: sample(ruby, row.funcall("short", ())?)?,
         });
     }
     Ok(parsed)
 }
 
-fn decision(ruby: &Ruby, class: Value, decision: &Decision) -> Result<Value, Error> {
+fn decision(ruby: &Ruby, decision: &Decision) -> Result<Value, Error> {
     let change = match decision.change {
-        Change::None => None,
-        Change::Raised => Some(ruby.to_symbol("raised")),
-        Change::Cleared => Some(ruby.to_symbol("cleared")),
+        Change::None => "none",
+        Change::Raised => "raised",
+        Change::Cleared => "cleared",
     };
-    class.funcall(
-        "new",
+    data(
+        ruby,
+        "Decision",
         (
             ruby.to_symbol(state(decision.state)),
-            change,
+            ruby.to_symbol(change),
             decision.measured,
             decision.long_milli,
             decision.short_milli,
-            decision.since,
+            decision.since.map(|since| nanos(ruby, since)),
         ),
     )
 }
 
+fn policy(ruby: &Ruby, value: Value) -> Result<OnNoData, Error> {
+    let symbol =
+        Symbol::from_value(value).ok_or_else(|| type_error(ruby, "policy must be a Symbol"))?;
+    match symbol.name()?.as_ref() {
+        "hold" => Ok(OnNoData::Hold),
+        "reset" => Ok(OnNoData::Reset),
+        "fire" => Ok(OnNoData::Fire),
+        _ => Err(Error::new(
+            ruby.exception_arg_error(),
+            "policy must be :hold, :reset or :fire",
+        )),
+    }
+}
+
+fn rule(ruby: &Ruby, value: Value) -> Result<Rule, Error> {
+    expect(ruby, value, "Rule", "expected a BudgetMachines::Rule")?;
+    let range = |message| Error::new(ruby.exception_range_error(), message);
+    let (fire_milli, clear_milli, severity): (Small, Small, Number) = (
+        value.funcall("fire_milli", ())?,
+        value.funcall("clear_milli", ())?,
+        value.funcall("severity", ())?,
+    );
+    let severity = u8::try_from(severity.0).map_err(|_| range("severity must be 0..255"))?;
+    Rule::new(fire_milli.0, clear_milli.0, severity)
+        .ok_or_else(|| range("thresholds need 0 < clear_milli <= fire_milli"))
+}
+
+/// A rule index. One that does not fit in `usize` names no rule.
+fn index(rule: Number) -> usize {
+    usize::try_from(rule.0).unwrap_or(usize::MAX)
+}
+
 impl Monitor {
-    pub fn new(ruby: &Ruby, args: &[Value]) -> Result<Self, Error> {
-        let args = scan_args::<(Small, Small), (), (), (), RHash, ()>(args)?;
-        let (good, per) = args.required;
-        let (policy, min_total) = get_kwargs::<_, (), (Option<Value>, Option<Number>), ()>(
-            args.keywords,
-            &[],
-            &["on_no_data", "min_total"],
-        )?
-        .optional;
-        let policy = match policy {
-            None => OnNoData::Hold,
-            Some(value) => {
-                let symbol = Symbol::from_value(value)
-                    .ok_or_else(|| type_error(ruby, "on_no_data must be a Symbol"))?;
-                match symbol.name()?.as_ref() {
-                    "hold" => OnNoData::Hold,
-                    "reset" => OnNoData::Reset,
-                    "fire" => OnNoData::Fire,
-                    _ => {
-                        return Err(Error::new(
-                            ruby.exception_arg_error(),
-                            "on_no_data must be :hold, :reset or :fire",
-                        ));
-                    }
-                }
-            }
-        };
-        let floor = min_total.map_or(0, |number| number.0);
-        let core = budget_machines::Monitor::new(objective(ruby, good, per)?, policy, floor);
+    pub fn new(
+        ruby: &Ruby,
+        target: Value,
+        on_no_data: Value,
+        min_total: Number,
+    ) -> Result<Self, Error> {
+        let core = budget_machines::Monitor::new(
+            objective(ruby, target)?,
+            policy(ruby, on_no_data)?,
+            min_total.0,
+        );
         Ok(Self {
             core: RefCell::new(core),
         })
     }
 
-    pub fn add_rule(
-        ruby: &Ruby,
-        this: Obj<Self>,
-        fire_milli: Small,
-        clear_milli: Small,
-        severity: Number,
-    ) -> Result<Value, Error> {
+    pub fn add_rule(ruby: &Ruby, this: Obj<Self>, added: Value) -> Result<Value, Error> {
         this.check_frozen()?;
-        let range = |message| Error::new(ruby.exception_range_error(), message);
-        let severity = u8::try_from(severity.0).map_err(|_| range("severity must be 0..255"))?;
-        let rule = Rule::new(fire_milli.0, clear_milli.0, severity)
-            .ok_or_else(|| range("thresholds need 0 < clear_milli <= fire_milli"))?;
+        let rule = rule(ruby, added)?;
         let outcome = this.core.borrow_mut().add_rule(rule);
         Ok(match outcome {
             Ok(index) => ruby.integer_from_u64(index as u64).as_value(),
@@ -134,12 +143,11 @@ impl Monitor {
     pub fn evaluate(
         ruby: &Ruby,
         this: Obj<Self>,
-        now: Number,
+        now: Nanos,
         readings: Value,
     ) -> Result<Value, Error> {
         this.check_frozen()?;
         let readings = windows(ruby, readings)?;
-        let class = data_class(ruby, "Decision")?;
         let outcome = this.core.borrow_mut().evaluate(now.0, &readings);
         let verdict = match outcome {
             Ok(verdict) => verdict,
@@ -147,30 +155,48 @@ impl Monitor {
         };
         let decisions = ruby.ary_new_capa(verdict.decisions().len());
         for each in verdict.decisions() {
-            decisions.push(decision(ruby, class, each)?)?;
+            decisions.push(decision(ruby, each)?)?;
         }
-        Ok(decisions.as_value())
+        decisions.freeze();
+        data(ruby, "Verdict", (decisions, verdict.worst()))
     }
 
-    pub fn states(ruby: &Ruby, this: &Self) -> Result<RArray, Error> {
-        let core = this.core.borrow();
-        let states = ruby.ary_new_capa(core.len());
-        for current in (0..core.len()).filter_map(|index| core.state(index)) {
-            states.push(ruby.to_symbol(state(current)))?;
-        }
-        Ok(states)
+    pub fn objective(ruby: &Ruby, this: &Self) -> Result<Value, Error> {
+        objective_value(ruby, this.core.borrow().objective())
+    }
+
+    pub fn rule(ruby: &Ruby, this: &Self, at: Number) -> Result<Option<Value>, Error> {
+        let rule = this.core.borrow().rule(index(at));
+        rule.map(|rule| {
+            data(
+                ruby,
+                "Rule",
+                (rule.fire_milli(), rule.clear_milli(), rule.severity()),
+            )
+        })
+        .transpose()
+    }
+
+    pub fn state(ruby: &Ruby, this: &Self, at: Number) -> Option<Symbol> {
+        let current = this.core.borrow().state(index(at))?;
+        Some(ruby.to_symbol(state(current)))
     }
 
     pub fn worst(&self) -> Option<usize> {
         self.core.borrow().worst()
     }
 
-    pub fn last(&self) -> Option<u64> {
-        self.core.borrow().last()
+    pub fn last(ruby: &Ruby, this: &Self) -> Option<Integer> {
+        let last = this.core.borrow().last()?;
+        Some(nanos(ruby, last))
     }
 
     pub fn size(&self) -> usize {
         self.core.borrow().len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.core.borrow().is_empty()
     }
 
     pub const fn capacity() -> usize {

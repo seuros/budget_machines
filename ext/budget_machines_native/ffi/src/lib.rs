@@ -3,8 +3,10 @@ mod init;
 mod ledger;
 mod monitor;
 
+use std::time::Duration;
+
 use budget_machines::{Counts, Objective, Refusal};
-use magnus::{Error, Integer, RModule, Ruby, Symbol, TryConvert, Value, prelude::*};
+use magnus::{Error, Integer, RClass, RModule, Ruby, Symbol, TryConvert, Value, prelude::*};
 
 /// Rules one monitor can hold.
 const CAPACITY: usize = 8;
@@ -24,6 +26,27 @@ impl TryConvert for Number {
     }
 }
 
+/// An instant: Integer nanoseconds in `0..2**64-1`.
+#[derive(Clone, Copy)]
+struct Nanos(Duration);
+
+impl TryConvert for Nanos {
+    fn try_convert(value: Value) -> Result<Self, Error> {
+        if Integer::from_value(value).is_none() {
+            return Err(Error::new(
+                Ruby::get_with(value).exception_type_error(),
+                "expected Integer nanoseconds",
+            ));
+        }
+        u64::try_convert(value).map(|nanos| Self(Duration::from_nanos(nanos)))
+    }
+}
+
+/// A duration as Integer nanoseconds, exact however large.
+fn nanos(ruby: &Ruby, duration: Duration) -> Integer {
+    ruby.integer_from_u128(duration.as_nanos())
+}
+
 #[derive(Clone, Copy)]
 struct Small(u32);
 
@@ -39,7 +62,28 @@ impl TryConvert for Small {
     }
 }
 
-fn objective(ruby: &Ruby, good: Small, per: Small) -> Result<Objective, Error> {
+/// Insist that `value` is the `Data` class `name`, so its readers are the
+/// validated fields.
+fn expect(ruby: &Ruby, value: Value, name: &str, message: &'static str) -> Result<(), Error> {
+    if value.is_kind_of(data_class(ruby, name)?) {
+        return Ok(());
+    }
+    Err(Error::new(ruby.exception_type_error(), message))
+}
+
+/// A `BudgetMachines::Objective`.
+fn objective(ruby: &Ruby, value: Value) -> Result<Objective, Error> {
+    expect(
+        ruby,
+        value,
+        "Objective",
+        "expected a BudgetMachines::Objective",
+    )?;
+    let (good, per): (Small, Small) = (value.funcall("good", ())?, value.funcall("per", ())?);
+    ratio(ruby, good, per)
+}
+
+fn ratio(ruby: &Ruby, good: Small, per: Small) -> Result<Objective, Error> {
     Objective::new(good.0, per.0).ok_or_else(|| {
         Error::new(
             ruby.exception_range_error(),
@@ -48,9 +92,32 @@ fn objective(ruby: &Ruby, good: Small, per: Small) -> Result<Objective, Error> {
     })
 }
 
-fn counts(ruby: &Ruby, good: Number, total: Number) -> Result<Counts, Error> {
+/// A `BudgetMachines::Counts`.
+fn counts(ruby: &Ruby, value: Value) -> Result<Counts, Error> {
+    expect(ruby, value, "Counts", "expected a BudgetMachines::Counts")?;
+    pair(
+        ruby,
+        value.funcall("good", ())?,
+        value.funcall("total", ())?,
+    )
+}
+
+fn pair(ruby: &Ruby, good: Number, total: Number) -> Result<Counts, Error> {
     Counts::new(good.0, total.0)
         .ok_or_else(|| Error::new(ruby.exception_range_error(), "good exceeds total"))
+}
+
+/// A `Data` value built by keyword-free positional `new`.
+fn data<A: magnus::ArgList>(ruby: &Ruby, name: &str, fields: A) -> Result<Value, Error> {
+    data_class(ruby, name)?.funcall("new", fields)
+}
+
+fn counts_value(ruby: &Ruby, counts: Counts) -> Result<Value, Error> {
+    data(ruby, "Counts", (counts.good(), counts.total()))
+}
+
+fn objective_value(ruby: &Ruby, objective: Objective) -> Result<Value, Error> {
+    data(ruby, "Objective", (objective.good(), objective.per()))
 }
 
 fn refusal(ruby: &Ruby, refused: Refusal) -> Symbol {
@@ -61,27 +128,45 @@ fn refusal(ruby: &Ruby, refused: Refusal) -> Symbol {
         Refusal::Full => "full",
         Refusal::Shape => "shape",
         Refusal::TimeRegression => "time_regression",
-        _ => "refused",
     })
 }
 
-/// A value object class defined on the Ruby side with `Data.define`.
-fn data_class(ruby: &Ruby, name: &str) -> Result<Value, Error> {
-    ruby.class_object()
-        .const_get::<_, RModule>("BudgetMachines")?
-        .const_get(name)
+/// A value object class defined on the Ruby side with `Data.define`; `name`
+/// may be nested (`Standing::Within`).
+fn data_class(ruby: &Ruby, name: &str) -> Result<RClass, Error> {
+    let mut scope: RModule = ruby.class_object().const_get("BudgetMachines")?;
+    let mut parts = name.split("::").peekable();
+    while let Some(part) = parts.next() {
+        if parts.peek().is_none() {
+            return scope.const_get(part);
+        }
+        scope = scope.const_get(part)?;
+    }
+    scope.const_get(name)
 }
 
-fn burn_milli(
+fn allowance(ruby: &Ruby, good: Small, per: Small, total: Number) -> Result<u64, Error> {
+    Ok(ratio(ruby, good, per)?.allowance(total.0))
+}
+
+fn burn_milli_of(
+    ruby: &Ruby,
+    good: Small,
+    per: Small,
+    bad: Number,
+    total: Number,
+) -> Result<Option<u64>, Error> {
+    Ok(ratio(ruby, good, per)?.burn_milli_of(bad.0, total.0))
+}
+
+fn burns_at_least(
     ruby: &Ruby,
     good: Small,
     per: Small,
     window_good: Number,
     window_total: Number,
-) -> Result<Option<u64>, Error> {
-    Ok(objective(ruby, good, per)?.burn_milli(counts(ruby, window_good, window_total)?))
-}
-
-fn allowance(ruby: &Ruby, good: Small, per: Small, total: Number) -> Result<u64, Error> {
-    Ok(objective(ruby, good, per)?.allowance(total.0))
+    threshold_milli: Small,
+) -> Result<bool, Error> {
+    let counts = pair(ruby, window_good, window_total)?;
+    Ok(ratio(ruby, good, per)?.burns_at_least(counts, threshold_milli.0))
 }

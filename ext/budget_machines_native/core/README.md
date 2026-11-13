@@ -27,6 +27,10 @@ on its own.
   falls below its clear threshold. `evaluate` returns one `Decision` per rule
   and the worst firing rule; a backwards instant or the wrong number of window
   pairs is refused and changes nothing.
+- Time is a `core::time::Duration` since an epoch the caller picks: the `now`
+  of `evaluate`, `Monitor::last` and `Decision::since`. The monitor never sees
+  a window length; the caller chooses the windows and brings their counts. A
+  ledger period is an opaque `u64` the caller advances, not a clock.
 
 No data is a state, not a zero. An empty period stands at `Standing::NoData`. A
 window that is `Sample::NoData`, empty, or below the monitor's minimum total is
@@ -34,6 +38,8 @@ not measured, and the monitor's `OnNoData` policy (`Hold`, `Reset`, `Fire`)
 decides the rule's state; `Decision::measured` says which happened.
 
 ```rust
+use core::time::Duration;
+
 use budget_machines::{Counts, Ledger, Monitor, Objective, OnNoData, Rule, Sample, Standing, Windows};
 
 let slo = Objective::new(999, 1000).expect("below 100%");
@@ -47,8 +53,11 @@ let mut monitor = Monitor::<4>::new(slo, OnNoData::Hold, 0);
 let page = monitor.add_rule(Rule::new(14_400, 14_400, 2).expect("thresholds")).expect("room");
 let window = |good, total| Sample::Counts(Counts::new(good, total).expect("good <= total"));
 let burning = Windows { long: window(98_000, 100_000), short: window(9_700, 10_000) };
-let verdict = monitor.evaluate(1, &[burning]).expect("time moved forward");
+// `now` is monotonic time since an epoch the caller picks.
+let now = Duration::from_secs(60);
+let verdict = monitor.evaluate(now, &[burning]).expect("time moved forward");
 assert_eq!(verdict.worst(), Some(page));
+assert_eq!(verdict.decisions()[page].since, Some(now));
 ```
 
 This is a policy core. It does not collect metrics, page anyone, or decide what

@@ -1,5 +1,7 @@
 //! Randomized runs against independent naive models.
 
+use core::time::Duration;
+
 use super::{counts, objective, rule, std::vec::Vec};
 use crate::{Change, Ledger, Monitor, OnNoData, Refusal, Sample, Standing, State, Windows};
 
@@ -102,7 +104,13 @@ fn monitor_matches_a_naive_replay_model() {
             rules.push((fire, clear));
         }
         let mut histories = [const { Vec::new() }; RULES];
-        for now in 0..40 {
+        // The instant each rule last changed state, kept beside the monitor.
+        let mut since = [None; RULES];
+        let mut now = Duration::ZERO;
+        assert_eq!(monitor.last(), None);
+        for _ in 0..40 {
+            // Time stands still or jumps ahead by an uneven number of nanoseconds.
+            now += Duration::from_nanos(rng.below(3) * rng.below(2_500_000_000));
             let mut windows = Vec::new();
             for history in &mut histories {
                 let (long, long_raw) = random_sample(&mut rng);
@@ -117,11 +125,16 @@ fn monitor_matches_a_naive_replay_model() {
             let Ok(verdict) = monitor.evaluate(now, &windows) else {
                 panic!("accepted");
             };
+            assert_eq!(monitor.last(), Some(now));
             for (index, decision) in verdict.decisions().iter().enumerate() {
                 let (fire, clear) = rules[index];
                 let history = &histories[index];
                 let expected = naive_state(history, fire, clear, policy);
-                assert_eq!(decision.state, expected, "round {round} now {now}");
+                assert_eq!(decision.state, expected, "round {round} now {now:?}");
+                if before[index] != Some(expected) {
+                    since[index] = Some(now);
+                }
+                assert_eq!(decision.since, since[index]);
                 assert_eq!(monitor.state(index), Some(expected));
                 let (long, short) = history[history.len() - 1];
                 assert_eq!(decision.long_milli.map(u128::from), long);
@@ -131,7 +144,7 @@ fn monitor_matches_a_naive_replay_model() {
                 let change = match (was, expected == State::Firing) {
                     (false, true) => Change::Raised,
                     (true, false) => Change::Cleared,
-                    _ => Change::None,
+                    (false, false) | (true, true) => Change::None,
                 };
                 assert_eq!(decision.change, change);
                 raised += u32::from(change == Change::Raised);

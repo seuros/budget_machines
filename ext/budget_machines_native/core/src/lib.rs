@@ -12,7 +12,6 @@ pub const MILLI: u32 = 1000;
 
 /// A refused call. The receiver is left exactly as it was.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[non_exhaustive]
 pub enum Refusal {
     /// The period is not the ledger's current one, or does not move forward.
     StalePeriod,
@@ -28,9 +27,20 @@ pub enum Refusal {
     TimeRegression,
 }
 
-/// The former name of [`Refusal`].
-#[deprecated(note = "renamed to `Refusal`")]
-pub type Refused = Refusal;
+impl core::fmt::Display for Refusal {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str(match self {
+            Self::StalePeriod => "the period is not current or does not move forward",
+            Self::Overflow => "the sum does not fit in 64 bits",
+            Self::BelowObserved => "the planned total is below the observed total",
+            Self::Full => "every rule slot is taken",
+            Self::Shape => "the number of window pairs differs from the number of rules",
+            Self::TimeRegression => "the instant precedes the previous evaluation",
+        })
+    }
+}
+
+impl core::error::Error for Refusal {}
 
 /// Exact good and total event counts for one window, supplied by the caller.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]

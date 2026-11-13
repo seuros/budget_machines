@@ -4,7 +4,7 @@ use std::cell::RefCell;
 use budget_machines::{Account, Standing};
 use magnus::{Error, Ruby, Value, prelude::*, typed_data::Obj};
 
-use crate::{Number, Small, counts, data_class, objective, refusal};
+use crate::{Number, counts, counts_value, data, objective, objective_value, refusal};
 
 #[magnus::wrap(class = "BudgetMachines::Ledger", free_immediately, size)]
 pub struct Ledger {
@@ -12,30 +12,28 @@ pub struct Ledger {
 }
 
 fn account(ruby: &Ruby, account: Account) -> Result<Value, Error> {
-    let (standing, remaining, overspent) = match account.standing {
-        Standing::NoData => ("no_data", account.allowance, 0),
-        Standing::Within { remaining } => ("within", remaining, 0),
-        Standing::Exhausted { overspent } => ("exhausted", 0, overspent),
+    let standing = match account.standing {
+        Standing::NoData => ruby.to_symbol("no_data").as_value(),
+        Standing::Within { remaining } => data(ruby, "Standing::Within", (remaining,))?,
+        Standing::Exhausted { overspent } => data(ruby, "Standing::Exhausted", (overspent,))?,
     };
-    data_class(ruby, "Account")?.funcall(
-        "new",
+    data(
+        ruby,
+        "Account",
         (
             account.period,
-            account.counts.good(),
-            account.counts.total(),
+            counts_value(ruby, account.counts)?,
             account.base,
             account.allowance,
-            ruby.to_symbol(standing),
-            remaining,
-            overspent,
+            standing,
             account.consumed_milli,
         ),
     )
 }
 
 impl Ledger {
-    pub fn new(ruby: &Ruby, good: Small, per: Small, period: Number) -> Result<Self, Error> {
-        let core = budget_machines::Ledger::new(objective(ruby, good, per)?, period.0);
+    pub fn new(ruby: &Ruby, target: Value, period: Number) -> Result<Self, Error> {
+        let core = budget_machines::Ledger::new(objective(ruby, target)?, period.0);
         Ok(Self {
             core: RefCell::new(core),
         })
@@ -45,23 +43,22 @@ impl Ledger {
         self.core.borrow().period()
     }
 
-    pub fn good(&self) -> u64 {
-        self.core.borrow().counts().good()
+    pub fn objective(ruby: &Ruby, this: &Self) -> Result<Value, Error> {
+        objective_value(ruby, this.core.borrow().objective())
     }
 
-    pub fn total(&self) -> u64 {
-        self.core.borrow().counts().total()
+    pub fn counts(ruby: &Ruby, this: &Self) -> Result<Value, Error> {
+        counts_value(ruby, this.core.borrow().counts())
     }
 
     pub fn record(
         ruby: &Ruby,
         this: Obj<Self>,
         period: Number,
-        good: Number,
-        total: Number,
+        window: Value,
     ) -> Result<Value, Error> {
         this.check_frozen()?;
-        let counts = counts(ruby, good, total)?;
+        let counts = counts(ruby, window)?;
         let outcome = this.core.borrow_mut().record(period.0, counts);
         Ok(match outcome {
             Ok(()) => ruby.to_symbol("ok"),
@@ -74,11 +71,10 @@ impl Ledger {
         ruby: &Ruby,
         this: Obj<Self>,
         period: Number,
-        good: Number,
-        total: Number,
+        reading: Value,
     ) -> Result<Value, Error> {
         this.check_frozen()?;
-        let counts = counts(ruby, good, total)?;
+        let counts = counts(ruby, reading)?;
         let outcome = this.core.borrow_mut().replace(period.0, counts);
         Ok(match outcome {
             Ok(()) => ruby.to_symbol("ok"),

@@ -1,10 +1,16 @@
 extern crate std;
 
+use core::time::Duration;
 use std::vec::Vec;
 
 use super::*;
 
 mod model;
+
+/// Test time in whole minutes since the epoch the test picked.
+const fn t(minutes: u64) -> Duration {
+    Duration::from_secs(minutes * 60)
+}
 
 fn objective(good: u32, per: u32) -> Objective {
     Objective::new(good, per).unwrap_or_else(|| panic!("valid objective"))
@@ -158,17 +164,17 @@ fn both_windows_must_burn_and_the_short_one_clears() {
     let hot = (9800, 10_000);
     let calm = (10_000, 10_000);
     // Long window alone: a spike that already ended.
-    let verdict = monitor.evaluate(1, &[pair(hot, calm), pair(hot, calm)]);
+    let verdict = monitor.evaluate(t(1), &[pair(hot, calm), pair(hot, calm)]);
     assert_eq!(verdict.map(|v| v.worst()), Ok(None));
     assert_eq!(monitor.state(0), Some(State::Quiet));
     // Short window alone: a blip not yet significant.
     assert_eq!(
         monitor
-            .evaluate(2, &[pair(calm, hot), pair(calm, hot)])
+            .evaluate(t(2), &[pair(calm, hot), pair(calm, hot)])
             .map(|v| v.worst()),
         Ok(None)
     );
-    let Ok(verdict) = monitor.evaluate(3, &[pair(hot, hot), pair(calm, hot)]) else {
+    let Ok(verdict) = monitor.evaluate(t(3), &[pair(hot, hot), pair(calm, hot)]) else {
         panic!("accepted");
     };
     assert_eq!(verdict.worst(), Some(0));
@@ -177,7 +183,7 @@ fn both_windows_must_burn_and_the_short_one_clears() {
     };
     assert_eq!(
         (page.state, page.change, page.measured, page.since),
-        (State::Firing, Change::Raised, true, Some(3))
+        (State::Firing, Change::Raised, true, Some(t(3)))
     );
     assert_eq!(
         (page.long_milli, page.short_milli),
@@ -185,9 +191,9 @@ fn both_windows_must_burn_and_the_short_one_clears() {
     );
     assert_eq!(
         (ticket.state, ticket.change, ticket.since),
-        (State::Quiet, Change::None, Some(1))
+        (State::Quiet, Change::None, Some(t(1)))
     );
-    let Ok(verdict) = monitor.evaluate(4, &[pair(hot, calm), pair(hot, hot)]) else {
+    let Ok(verdict) = monitor.evaluate(t(4), &[pair(hot, calm), pair(hot, hot)]) else {
         panic!("accepted");
     };
     assert_eq!(verdict.worst(), Some(1));
@@ -208,7 +214,7 @@ fn hysteresis_holds_until_below_the_clear_threshold() {
     let step = |monitor: &mut Monitor<1>, now, bad: u64| {
         let window = (100 - bad, 100);
         monitor
-            .evaluate(now, &[pair(window, window)])
+            .evaluate(t(now), &[pair(window, window)])
             .map(|verdict| verdict.decisions().first().map(|d| (d.state, d.change)))
     };
     assert_eq!(
@@ -244,7 +250,7 @@ fn no_data_follows_the_configured_policy() {
     ] {
         let mut monitor = Monitor::<1>::new(objective(9, 10), policy, 5);
         assert_eq!(monitor.add_rule(rule(1000, 1000, 0)), Ok(0));
-        let Ok(verdict) = monitor.evaluate(0, &[SILENT]) else {
+        let Ok(verdict) = monitor.evaluate(t(0), &[SILENT]) else {
             panic!("accepted");
         };
         let [first] = verdict.decisions() else {
@@ -252,9 +258,12 @@ fn no_data_follows_the_configured_policy() {
         };
         assert_eq!((first.state, first.measured), (from_start, false));
         assert_eq!((first.long_milli, first.short_milli), (None, None));
-        assert_eq!(monitor.evaluate(1, &[hot]).map(|v| v.worst()), Ok(Some(0)));
+        assert_eq!(
+            monitor.evaluate(t(1), &[hot]).map(|v| v.worst()),
+            Ok(Some(0))
+        );
         // Below the minimum total is no data even though counts were supplied.
-        let Ok(verdict) = monitor.evaluate(2, &[thin]) else {
+        let Ok(verdict) = monitor.evaluate(t(2), &[thin]) else {
             panic!("accepted");
         };
         let [after] = verdict.decisions() else {
@@ -271,26 +280,41 @@ fn no_data_follows_the_configured_policy() {
 fn monitor_refusals_leave_it_untouched() {
     let mut monitor = Monitor::<1>::new(objective(9, 10), OnNoData::Reset, 0);
     assert!(monitor.is_empty());
-    assert_eq!(monitor.evaluate(0, &[]).map(|v| v.decisions().len()), Ok(0));
+    assert_eq!(
+        monitor.evaluate(t(0), &[]).map(|v| v.decisions().len()),
+        Ok(0)
+    );
     assert_eq!(monitor.add_rule(rule(1000, 1000, 0)), Ok(0));
     assert_eq!(monitor.add_rule(rule(1000, 1000, 0)), Err(Refusal::Full));
     assert_eq!(monitor.len(), 1);
     assert_eq!((monitor.rule(1), monitor.state(1)), (None, None));
     let hot = pair((0, 10), (0, 10));
-    assert_eq!(monitor.evaluate(10, &[hot]).map(|v| v.worst()), Ok(Some(0)));
-    let before = monitor;
-    assert_eq!(monitor.evaluate(9, &[SILENT]), Err(Refusal::TimeRegression));
-    assert_eq!(monitor.evaluate(11, &[]), Err(Refusal::Shape));
-    assert_eq!(monitor.evaluate(11, &[hot, hot]), Err(Refusal::Shape));
-    assert_eq!(monitor, before);
-    assert_eq!(monitor.last(), Some(10));
-    // The same instant may be evaluated again; u64::MAX is a valid instant.
-    assert_eq!(monitor.evaluate(10, &[hot]).map(|v| v.worst()), Ok(Some(0)));
     assert_eq!(
-        monitor.evaluate(u64::MAX, &[SILENT]).map(|v| v.worst()),
+        monitor.evaluate(t(10), &[hot]).map(|v| v.worst()),
+        Ok(Some(0))
+    );
+    let before = monitor;
+    assert_eq!(
+        monitor.evaluate(t(9), &[SILENT]),
+        Err(Refusal::TimeRegression)
+    );
+    assert_eq!(monitor.evaluate(t(11), &[]), Err(Refusal::Shape));
+    assert_eq!(monitor.evaluate(t(11), &[hot, hot]), Err(Refusal::Shape));
+    assert_eq!(monitor, before);
+    assert_eq!(monitor.last(), Some(t(10)));
+    // The same instant may be evaluated again; the last one is a valid instant.
+    assert_eq!(
+        monitor.evaluate(t(10), &[hot]).map(|v| v.worst()),
+        Ok(Some(0))
+    );
+    assert_eq!(
+        monitor
+            .evaluate(Duration::MAX, &[SILENT])
+            .map(|v| v.worst()),
         Ok(None)
     );
     assert_eq!(monitor.state(0), Some(State::NoData));
+    assert_eq!(monitor.last(), Some(Duration::MAX));
     assert_eq!(
         Monitor::<0>::new(objective(9, 10), OnNoData::Hold, 0).add_rule(rule(1, 1, 0)),
         Err(Refusal::Full)
@@ -306,23 +330,18 @@ fn worst_prefers_severity_then_order() {
     let hot = pair((0, 10), (0, 10));
     let calm = pair((10, 10), (10, 10));
     assert_eq!(
-        monitor.evaluate(0, &[hot, calm, hot]).map(|v| v.worst()),
+        monitor.evaluate(t(0), &[hot, calm, hot]).map(|v| v.worst()),
         Ok(Some(2))
     );
     assert_eq!(
-        monitor.evaluate(0, &[hot, hot, hot]).map(|v| v.worst()),
+        monitor.evaluate(t(0), &[hot, hot, hot]).map(|v| v.worst()),
         Ok(Some(1))
     );
     assert_eq!(
-        monitor.evaluate(0, &[hot, calm, calm]).map(|v| v.worst()),
+        monitor
+            .evaluate(t(0), &[hot, calm, calm])
+            .map(|v| v.worst()),
         Ok(Some(0))
     );
     assert_eq!(monitor.worst(), Some(0));
-}
-
-#[test]
-#[allow(deprecated)]
-fn the_old_refusal_name_is_the_same_type() {
-    let old: Refused = Refusal::Full;
-    assert_eq!(old, Refusal::Full);
 }

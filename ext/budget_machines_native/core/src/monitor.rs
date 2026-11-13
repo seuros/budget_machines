@@ -1,5 +1,7 @@
 //! Multi-window burn-rate alerting with explicit no-data handling.
 
+use core::time::Duration;
+
 use crate::{Counts, Objective, Refusal};
 
 /// One window's reading.
@@ -113,7 +115,7 @@ pub struct Decision {
     /// Short-window burn rate in thousandths; `None` without data.
     pub short_milli: Option<u64>,
     /// Instant the rule entered `state`; `None` if it never left its start.
-    pub since: Option<u64>,
+    pub since: Option<Duration>,
 }
 
 const UNDECIDED: Decision = Decision {
@@ -152,7 +154,7 @@ impl<const R: usize> Verdict<R> {
 struct Slot {
     rule: Rule,
     state: State,
-    since: Option<u64>,
+    since: Option<Duration>,
 }
 
 /// Up to `R` burn-rate rules over one objective.
@@ -163,7 +165,7 @@ pub struct Monitor<const R: usize> {
     min_total: u64,
     slots: [Option<Slot>; R],
     len: usize,
-    last: Option<u64>,
+    last: Option<Duration>,
 }
 
 impl<const R: usize> Monitor<R> {
@@ -229,7 +231,7 @@ impl<const R: usize> Monitor<R> {
 
     /// Instant of the latest accepted evaluation.
     #[must_use]
-    pub const fn last(&self) -> Option<u64> {
+    pub const fn last(&self) -> Option<Duration> {
         self.last
     }
 
@@ -248,11 +250,15 @@ impl<const R: usize> Monitor<R> {
 
     /// Judge every rule on its window pair, `windows[i]` for rule `i`.
     ///
+    /// `now` is monotonic time since an epoch the caller picks. It orders
+    /// evaluations and stamps [`Decision::since`]; the window lengths are the
+    /// caller's and never reach the monitor.
+    ///
     /// # Errors
     /// [`Refusal::TimeRegression`] when `now` precedes the previous evaluation
     /// and [`Refusal::Shape`] when `windows` does not hold one pair per rule.
     /// Neither changes any alert state.
-    pub fn evaluate(&mut self, now: u64, windows: &[Windows]) -> Result<Verdict<R>, Refusal> {
+    pub fn evaluate(&mut self, now: Duration, windows: &[Windows]) -> Result<Verdict<R>, Refusal> {
         if self.last.is_some_and(|last| now < last) {
             return Err(Refusal::TimeRegression);
         }
@@ -281,7 +287,7 @@ impl<const R: usize> Monitor<R> {
 const fn usable(sample: Sample, floor: u64) -> Option<Counts> {
     match sample {
         Sample::Counts(counts) if counts.total() > 0 && counts.total() >= floor => Some(counts),
-        _ => None,
+        Sample::Counts(_) | Sample::NoData => None,
     }
 }
 
@@ -291,7 +297,7 @@ fn judge(
     floor: u64,
     slot: &mut Slot,
     pair: Windows,
-    now: u64,
+    now: Duration,
 ) -> Decision {
     let (long, short) = (usable(pair.long, floor), usable(pair.short, floor));
     let was_firing = slot.state == State::Firing;
@@ -320,7 +326,7 @@ fn judge(
     let change = match (was_firing, state == State::Firing) {
         (false, true) => Change::Raised,
         (true, false) => Change::Cleared,
-        _ => Change::None,
+        (false, false) | (true, true) => Change::None,
     };
     Decision {
         state,

@@ -3,59 +3,138 @@ module BudgetMachines
   CAPACITY: Integer
   MILLI: Integer
 
-  type standing = :no_data | :within | :exhausted
   type state = :no_data | :quiet | :firing
-  type sample = [Integer, Integer]?
+  type change = :none | :raised | :cleared
+  type on_no_data = :hold | :reset | :fire
+  # Every symbol that means "this call was not honoured and changed nothing".
+  # Each method below lists exactly the ones it can answer.
+  type refusal = :stale_period | :overflow | :below_observed | :full | :shape | :time_regression
+  # A window reading: :no_data when the caller has none, or exact counts.
+  type sample = :no_data | Sample::Counts
 
-  def self.burn_milli: (Integer good, Integer per, Integer window_good, Integer window_total) -> Integer?
-  def self.allowance: (Integer good, Integer per, Integer total) -> Integer
+  # `good <= total`, both in 0..2**64-1; anything else raises TypeError or RangeError.
+  class Counts < Data
+    attr_reader good: Integer
+    attr_reader total: Integer
+    def self.new: (Integer good, Integer total) -> Counts
+                | (good: Integer, total: Integer) -> Counts
+    def bad: () -> Integer
+    def checked_add: (Counts other) -> Counts?
+  end
+
+  # `good < per`, both in 0..2**32-1; anything else raises TypeError or RangeError.
+  class Objective < Data
+    attr_reader good: Integer
+    attr_reader per: Integer
+    def self.new: (Integer good, Integer per) -> Objective
+                | (good: Integer, per: Integer) -> Objective
+    def tolerated: () -> Integer
+    def allowance: (Integer total) -> Integer
+    def burn_milli_of: (Integer bad, Integer total) -> Integer?
+    def burn_milli: (Counts counts) -> Integer?
+    def burns_at_least: (Counts counts, Integer threshold_milli) -> bool
+  end
+
+  module Sample
+    class Counts < Data
+      attr_reader counts: BudgetMachines::Counts
+      def self.new: (BudgetMachines::Counts counts) -> Counts
+                  | (counts: BudgetMachines::Counts) -> Counts
+    end
+  end
+
+  module Standing
+    class Within < Data
+      attr_reader remaining: Integer
+      def self.new: (Integer remaining) -> Within
+                  | (remaining: Integer) -> Within
+    end
+
+    class Exhausted < Data
+      attr_reader overspent: Integer
+      def self.new: (Integer overspent) -> Exhausted
+                  | (overspent: Integer) -> Exhausted
+    end
+  end
+
+  type standing = :no_data | Standing::Within | Standing::Exhausted
 
   class Account < Data
     attr_reader period: Integer
-    attr_reader good: Integer
-    attr_reader total: Integer
+    attr_reader counts: Counts
     attr_reader base: Integer
     attr_reader allowance: Integer
     attr_reader standing: standing
-    attr_reader remaining: Integer
-    attr_reader overspent: Integer
     attr_reader consumed_milli: Integer?
-    def bad: () -> Integer
     def no_data?: () -> bool
+    def within?: () -> bool
     def exhausted?: () -> bool
+  end
+
+  class Windows < Data
+    attr_reader long: sample
+    attr_reader short: sample
+    def self.new: (sample long, sample short) -> Windows
+                | (long: sample, short: sample) -> Windows
+  end
+
+  # `0 < clear_milli <= fire_milli`, both in 0..2**32-1; `severity` in 0..255.
+  class Rule < Data
+    attr_reader fire_milli: Integer
+    attr_reader clear_milli: Integer
+    attr_reader severity: Integer
+    def self.new: (Integer fire_milli, Integer clear_milli, Integer severity) -> Rule
+                | (fire_milli: Integer, clear_milli: Integer, severity: Integer) -> Rule
   end
 
   class Decision < Data
     attr_reader state: state
-    attr_reader change: (:raised | :cleared)?
+    attr_reader change: change
     attr_reader measured: bool
     attr_reader long_milli: Integer?
     attr_reader short_milli: Integer?
+    # Instant the rule entered `state`, Integer nanoseconds; nil if it never changed.
     attr_reader since: Integer?
     def firing?: () -> bool
     def no_data?: () -> bool
   end
 
+  class Verdict < Data
+    attr_reader decisions: Array[Decision]
+    attr_reader worst: Integer?
+  end
+
   class Ledger
-    def self.new: (Integer good, Integer per, Integer period) -> Ledger
+    def self.new: (Objective objective, Integer period) -> Ledger
+    def objective: () -> Objective
     def period: () -> Integer
-    def good: () -> Integer
-    def total: () -> Integer
-    def record: (Integer period, Integer good, Integer total) -> (:ok | :stale_period | :overflow)
-    def replace: (Integer period, Integer good, Integer total) -> (:ok | :stale_period)
+    def counts: () -> Counts
+    # Honoured: :ok. Refused: :stale_period, :overflow.
+    def record: (Integer period, Counts counts) -> (:ok | :stale_period | :overflow)
+    # Honoured: :ok. Refused: :stale_period.
+    def replace: (Integer period, Counts counts) -> (:ok | :stale_period)
+    # Honoured: the closed period's Account. Refused: :stale_period.
     def roll: (Integer period) -> (Account | :stale_period)
     def account: () -> Account
+    # A pure query. Refused: :below_observed.
     def account_against: (Integer planned_total) -> (Account | :below_observed)
   end
 
   class Monitor
-    def self.new: (Integer good, Integer per, ?on_no_data: :hold | :reset | :fire, ?min_total: Integer) -> Monitor
-    def add_rule: (Integer fire_milli, Integer clear_milli, Integer severity) -> (Integer | :full)
-    def evaluate: (Integer now, Array[[sample, sample]] windows) -> (Array[Decision] | :time_regression | :shape)
-    def states: () -> Array[state]
-    def worst: () -> Integer?
-    def last: () -> Integer?
+    def self.new: (Objective objective, on_no_data policy, Integer min_total) -> Monitor
+    # Honoured: the rule's index. Refused: :full.
+    def add_rule: (Rule rule) -> (Integer | :full)
     def size: () -> Integer
+    def empty?: () -> bool
     def capacity: () -> Integer
+    def objective: () -> Objective
+    def rule: (Integer index) -> Rule?
+    def state: (Integer index) -> state?
+    # Instant of the latest accepted evaluation, Integer nanoseconds.
+    def last: () -> Integer?
+    def worst: () -> Integer?
+    # `now` is Integer nanoseconds of monotonic time. Honoured: a Verdict.
+    # Refused: :time_regression, :shape.
+    def evaluate: (Integer now, Array[Windows] windows) -> (Verdict | :time_regression | :shape)
   end
 end
