@@ -1,6 +1,6 @@
 //! Error-budget accounting for one compliance period at a time.
 
-use crate::{Counts, Objective, Refused};
+use crate::{Counts, Objective, Refusal};
 
 /// Where the period stands against its allowance.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -80,14 +80,14 @@ impl Ledger {
     /// Add a window's counts to the current period.
     ///
     /// # Errors
-    /// [`Refused::StalePeriod`] when `period` is not the current one, and
-    /// [`Refused::Overflow`] when a sum would not fit in 64 bits.
-    pub const fn record(&mut self, period: u64, counts: Counts) -> Result<(), Refused> {
+    /// [`Refusal::StalePeriod`] when `period` is not the current one, and
+    /// [`Refusal::Overflow`] when a sum would not fit in 64 bits.
+    pub const fn record(&mut self, period: u64, counts: Counts) -> Result<(), Refusal> {
         if period != self.period {
-            return Err(Refused::StalePeriod);
+            return Err(Refusal::StalePeriod);
         }
         let Some(sum) = self.counts.checked_add(counts) else {
-            return Err(Refused::Overflow);
+            return Err(Refusal::Overflow);
         };
         self.counts = sum;
         Ok(())
@@ -96,10 +96,10 @@ impl Ledger {
     /// Replace the current period's counts with an authoritative reading.
     ///
     /// # Errors
-    /// [`Refused::StalePeriod`] when `period` is not the current one.
-    pub const fn replace(&mut self, period: u64, counts: Counts) -> Result<(), Refused> {
+    /// [`Refusal::StalePeriod`] when `period` is not the current one.
+    pub const fn replace(&mut self, period: u64, counts: Counts) -> Result<(), Refusal> {
         if period != self.period {
-            return Err(Refused::StalePeriod);
+            return Err(Refusal::StalePeriod);
         }
         self.counts = counts;
         Ok(())
@@ -109,10 +109,10 @@ impl Ledger {
     /// period's final account.
     ///
     /// # Errors
-    /// [`Refused::StalePeriod`] unless `period` is greater than the current one.
-    pub fn roll(&mut self, period: u64) -> Result<Account, Refused> {
+    /// [`Refusal::StalePeriod`] unless `period` is greater than the current one.
+    pub fn roll(&mut self, period: u64) -> Result<Account, Refusal> {
         if period <= self.period {
-            return Err(Refused::StalePeriod);
+            return Err(Refusal::StalePeriod);
         }
         let closed = self.account();
         self.period = period;
@@ -130,11 +130,11 @@ impl Ledger {
     /// shrink to nothing while the period is young.
     ///
     /// # Errors
-    /// [`Refused::BelowObserved`] when the plan is smaller than the total
+    /// [`Refusal::BelowObserved`] when the plan is smaller than the total
     /// already observed.
-    pub fn account_against(&self, planned_total: u64) -> Result<Account, Refused> {
+    pub fn account_against(&self, planned_total: u64) -> Result<Account, Refusal> {
         if planned_total < self.counts.total() {
-            return Err(Refused::BelowObserved);
+            return Err(Refusal::BelowObserved);
         }
         Ok(self.against(planned_total))
     }

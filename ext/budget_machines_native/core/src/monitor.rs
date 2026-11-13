@@ -1,6 +1,6 @@
 //! Multi-window burn-rate alerting with explicit no-data handling.
 
-use crate::{Counts, Objective, Refused};
+use crate::{Counts, Objective, Refusal};
 
 /// One window's reading.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -184,10 +184,10 @@ impl<const R: usize> Monitor<R> {
     /// Append a rule, starting in [`State::NoData`], and return its index.
     ///
     /// # Errors
-    /// [`Refused::Full`] when all `R` slots are taken.
-    pub fn add_rule(&mut self, rule: Rule) -> Result<usize, Refused> {
+    /// [`Refusal::Full`] when all `R` slots are taken.
+    pub fn add_rule(&mut self, rule: Rule) -> Result<usize, Refusal> {
         let index = self.len;
-        let slot = self.slots.get_mut(index).ok_or(Refused::Full)?;
+        let slot = self.slots.get_mut(index).ok_or(Refusal::Full)?;
         *slot = Some(Slot {
             rule,
             state: State::NoData,
@@ -249,15 +249,15 @@ impl<const R: usize> Monitor<R> {
     /// Judge every rule on its window pair, `windows[i]` for rule `i`.
     ///
     /// # Errors
-    /// [`Refused::TimeRegression`] when `now` precedes the previous evaluation
-    /// and [`Refused::Shape`] when `windows` does not hold one pair per rule.
+    /// [`Refusal::TimeRegression`] when `now` precedes the previous evaluation
+    /// and [`Refusal::Shape`] when `windows` does not hold one pair per rule.
     /// Neither changes any alert state.
-    pub fn evaluate(&mut self, now: u64, windows: &[Windows]) -> Result<Verdict<R>, Refused> {
+    pub fn evaluate(&mut self, now: u64, windows: &[Windows]) -> Result<Verdict<R>, Refusal> {
         if self.last.is_some_and(|last| now < last) {
-            return Err(Refused::TimeRegression);
+            return Err(Refusal::TimeRegression);
         }
         if windows.len() != self.len {
-            return Err(Refused::Shape);
+            return Err(Refusal::Shape);
         }
         let (objective, policy, floor) = (self.objective, self.policy, self.min_total);
         let mut decisions = [UNDECIDED; R];

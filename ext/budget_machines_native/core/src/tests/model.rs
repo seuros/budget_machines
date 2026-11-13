@@ -1,7 +1,7 @@
 //! Randomized runs against independent naive models.
 
 use super::{counts, objective, rule, std::vec::Vec};
-use crate::{Change, Ledger, Monitor, OnNoData, Refused, Sample, Standing, State, Windows};
+use crate::{Change, Ledger, Monitor, OnNoData, Refusal, Sample, Standing, State, Windows};
 
 struct Rng(u64);
 
@@ -175,7 +175,7 @@ fn ledger_matches_a_naive_model() {
                     assert_eq!(ledger.replace(period, window), Ok(()));
                     (ok, total) = (window.good(), window.total());
                 }
-                2 => assert_eq!(ledger.record(period + 1, window), Err(Refused::StalePeriod)),
+                2 => assert_eq!(ledger.record(period + 1, window), Err(Refusal::StalePeriod)),
                 _ => {
                     assert_eq!(ledger.record(period, window), Ok(()));
                     (ok, total) = (ok + window.good(), total + window.total());

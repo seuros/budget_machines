@@ -13,7 +13,7 @@ pub const MILLI: u32 = 1000;
 /// A refused call. The receiver is left exactly as it was.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
-pub enum Refused {
+pub enum Refusal {
     /// The period is not the ledger's current one, or does not move forward.
     StalePeriod,
     /// The sum would not fit in 64 bits.
@@ -27,6 +27,10 @@ pub enum Refused {
     /// The evaluation instant is earlier than the previous one.
     TimeRegression,
 }
+
+/// The former name of [`Refusal`].
+#[deprecated(note = "renamed to `Refusal`")]
+pub type Refused = Refusal;
 
 /// Exact good and total event counts for one window, supplied by the caller.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]

@@ -3,7 +3,7 @@ mod init;
 mod ledger;
 mod monitor;
 
-use budget_machines::{Counts, Objective, Refused};
+use budget_machines::{Counts, Objective, Refusal};
 use magnus::{Error, Integer, RModule, Ruby, Symbol, TryConvert, Value, prelude::*};
 
 /// Rules one monitor can hold.
@@ -53,14 +53,14 @@ fn counts(ruby: &Ruby, good: Number, total: Number) -> Result<Counts, Error> {
         .ok_or_else(|| Error::new(ruby.exception_range_error(), "good exceeds total"))
 }
 
-fn refusal(ruby: &Ruby, refused: Refused) -> Symbol {
+fn refusal(ruby: &Ruby, refused: Refusal) -> Symbol {
     ruby.to_symbol(match refused {
-        Refused::StalePeriod => "stale_period",
-        Refused::Overflow => "overflow",
-        Refused::BelowObserved => "below_observed",
-        Refused::Full => "full",
-        Refused::Shape => "shape",
-        Refused::TimeRegression => "time_regression",
+        Refusal::StalePeriod => "stale_period",
+        Refusal::Overflow => "overflow",
+        Refusal::BelowObserved => "below_observed",
+        Refusal::Full => "full",
+        Refusal::Shape => "shape",
+        Refusal::TimeRegression => "time_regression",
         _ => "refused",
     })
 }

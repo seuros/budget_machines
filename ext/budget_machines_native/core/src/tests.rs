@@ -116,7 +116,7 @@ fn ledger_plans_against_a_forecast() {
         Ok((100_000, 100, Standing::Within { remaining: 99 }))
     );
     assert_eq!(planned.map(|account| account.consumed_milli), Ok(Some(10)));
-    assert_eq!(ledger.account_against(9), Err(Refused::BelowObserved));
+    assert_eq!(ledger.account_against(9), Err(Refusal::BelowObserved));
     let unseen = Ledger::new(objective(999, 1000), 0).account_against(1000);
     assert_eq!(
         unseen.map(|account| (account.allowance, account.standing)),
@@ -129,13 +129,13 @@ fn ledger_refusals_leave_it_untouched() {
     let mut ledger = Ledger::new(objective(9, 10), 5);
     assert_eq!(ledger.record(5, counts(u64::MAX - 1, u64::MAX - 1)), Ok(()));
     let before = ledger;
-    assert_eq!(ledger.record(4, counts(1, 1)), Err(Refused::StalePeriod));
-    assert_eq!(ledger.record(6, counts(1, 1)), Err(Refused::StalePeriod));
-    assert_eq!(ledger.replace(4, counts(1, 1)), Err(Refused::StalePeriod));
-    assert_eq!(ledger.record(5, counts(2, 2)), Err(Refused::Overflow));
-    assert_eq!(ledger.record(5, counts(0, 2)), Err(Refused::Overflow));
-    assert_eq!(ledger.roll(5), Err(Refused::StalePeriod));
-    assert_eq!(ledger.roll(4), Err(Refused::StalePeriod));
+    assert_eq!(ledger.record(4, counts(1, 1)), Err(Refusal::StalePeriod));
+    assert_eq!(ledger.record(6, counts(1, 1)), Err(Refusal::StalePeriod));
+    assert_eq!(ledger.replace(4, counts(1, 1)), Err(Refusal::StalePeriod));
+    assert_eq!(ledger.record(5, counts(2, 2)), Err(Refusal::Overflow));
+    assert_eq!(ledger.record(5, counts(0, 2)), Err(Refusal::Overflow));
+    assert_eq!(ledger.roll(5), Err(Refusal::StalePeriod));
+    assert_eq!(ledger.roll(4), Err(Refusal::StalePeriod));
     assert_eq!(ledger, before);
     assert_eq!(ledger.record(5, counts(1, 1)), Ok(()));
     let closed = ledger.roll(u64::MAX);
@@ -146,8 +146,8 @@ fn ledger_refusals_leave_it_untouched() {
     assert_eq!(ledger.period(), u64::MAX);
     assert_eq!(ledger.counts(), Counts::default());
     assert_eq!(ledger.account().standing, Standing::NoData);
-    assert_eq!(ledger.record(5, counts(1, 1)), Err(Refused::StalePeriod));
-    assert_eq!(ledger.roll(u64::MAX), Err(Refused::StalePeriod));
+    assert_eq!(ledger.record(5, counts(1, 1)), Err(Refusal::StalePeriod));
+    assert_eq!(ledger.roll(u64::MAX), Err(Refusal::StalePeriod));
 }
 
 #[test]
@@ -273,15 +273,15 @@ fn monitor_refusals_leave_it_untouched() {
     assert!(monitor.is_empty());
     assert_eq!(monitor.evaluate(0, &[]).map(|v| v.decisions().len()), Ok(0));
     assert_eq!(monitor.add_rule(rule(1000, 1000, 0)), Ok(0));
-    assert_eq!(monitor.add_rule(rule(1000, 1000, 0)), Err(Refused::Full));
+    assert_eq!(monitor.add_rule(rule(1000, 1000, 0)), Err(Refusal::Full));
     assert_eq!(monitor.len(), 1);
     assert_eq!((monitor.rule(1), monitor.state(1)), (None, None));
     let hot = pair((0, 10), (0, 10));
     assert_eq!(monitor.evaluate(10, &[hot]).map(|v| v.worst()), Ok(Some(0)));
     let before = monitor;
-    assert_eq!(monitor.evaluate(9, &[SILENT]), Err(Refused::TimeRegression));
-    assert_eq!(monitor.evaluate(11, &[]), Err(Refused::Shape));
-    assert_eq!(monitor.evaluate(11, &[hot, hot]), Err(Refused::Shape));
+    assert_eq!(monitor.evaluate(9, &[SILENT]), Err(Refusal::TimeRegression));
+    assert_eq!(monitor.evaluate(11, &[]), Err(Refusal::Shape));
+    assert_eq!(monitor.evaluate(11, &[hot, hot]), Err(Refusal::Shape));
     assert_eq!(monitor, before);
     assert_eq!(monitor.last(), Some(10));
     // The same instant may be evaluated again; u64::MAX is a valid instant.
@@ -293,7 +293,7 @@ fn monitor_refusals_leave_it_untouched() {
     assert_eq!(monitor.state(0), Some(State::NoData));
     assert_eq!(
         Monitor::<0>::new(objective(9, 10), OnNoData::Hold, 0).add_rule(rule(1, 1, 0)),
-        Err(Refused::Full)
+        Err(Refusal::Full)
     );
 }
 
@@ -318,4 +318,11 @@ fn worst_prefers_severity_then_order() {
         Ok(Some(0))
     );
     assert_eq!(monitor.worst(), Some(0));
+}
+
+#[test]
+#[allow(deprecated)]
+fn the_old_refusal_name_is_the_same_type() {
+    let old: Refused = Refusal::Full;
+    assert_eq!(old, Refusal::Full);
 }
