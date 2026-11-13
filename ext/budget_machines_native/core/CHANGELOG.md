@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.0](https://github.com/seuros/budget_machines/compare/budget-machines-v0.2.0...budget-machines-v0.3.0) (2026-11-13)
+
+
+### Features
+
+* rename Refused to Refusal, keep deprecated alias ([cca679d](https://github.com/seuros/budget_machines/commit/cca679ddb53a8a45d626d141965cd255e45d6b7c))
+
 ## [0.2.0](https://github.com/seuros/budget_machines/compare/budget-machines-v0.1.0...budget-machines-v0.2.0) (2026-11-12)
 
 
