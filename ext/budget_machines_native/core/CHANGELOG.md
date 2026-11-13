@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.4.0](https://github.com/seuros/budget_machines/compare/budget-machines-v0.3.0...budget-machines-v0.4.0) (2026-11-13)
+
+
+### ⚠ BREAKING CHANGES
+
+* see CONVENTIONS: one exhaustive Refusal per crate, Result from every mutator, honoured idempotent repeats, Ruby mirrors the core. No compatibility aliases. Ruby gains Objective, Counts, Rule, Windows, Verdict, Standing and Sample values; Monitor arguments are required; times are Integer nanoseconds.
+
+### Features
+
+* Refusal without alias, Duration evaluation instants, Ruby mirrors the core types ([0f2792d](https://github.com/seuros/budget_machines/commit/0f2792d88b01d6f7f331f1383aa5c779010f7a24))
+
 ## [0.3.0](https://github.com/seuros/budget_machines/compare/budget-machines-v0.2.0...budget-machines-v0.3.0) (2026-11-13)
 
 
