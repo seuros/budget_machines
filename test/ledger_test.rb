@@ -143,6 +143,10 @@ class LedgerTest < Minitest::Test
     assert_raises(FrozenError) { ledger.record(0, counts(1, 1)) }
     assert_raises(FrozenError) { ledger.replace(0, counts(1, 1)) }
     assert_raises(FrozenError) { ledger.roll(1) }
+    # Frozen is checked first, before the arguments are read.
+    assert_raises(FrozenError) { ledger.record(-1, :counts) }
+    assert_raises(FrozenError) { ledger.replace(1.5, nil) }
+    assert_raises(FrozenError) { ledger.roll('1') }
     assert_kind_of Standing::Within, ledger.account.standing
     assert_kind_of Standing::Within, ledger.account_against(10).standing
   end

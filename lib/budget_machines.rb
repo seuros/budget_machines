@@ -50,7 +50,7 @@ module BudgetMachines
     # Bad events are within the allowance; `remaining` (0..2**64-1) are still tolerated.
     Within = Data.define(:remaining) do
       def initialize(remaining:)
-        remaining = BudgetMachines.__send__(:__u64, remaining)
+        remaining = BudgetMachines.__send__(:__remaining, remaining)
         super
       end
     end
@@ -58,7 +58,7 @@ module BudgetMachines
     # Bad events exceed the allowance by `overspent` (0..2**64-1).
     Exhausted = Data.define(:overspent) do
       def initialize(overspent:)
-        overspent = BudgetMachines.__send__(:__u64, overspent)
+        overspent = BudgetMachines.__send__(:__overspent, overspent)
         super
       end
     end
@@ -151,7 +151,7 @@ module BudgetMachines
 
   HOOKS = %i[
     __allowance __burn_milli_of __burn_milli __burns_at_least __counts __checked_add __objective
-    __rule __u64 __sample __windows __account __decision __verdict
+    __rule __remaining __overspent __sample __windows __account __decision __verdict
   ].freeze
   private_class_method(*HOOKS)
   private_constant :HOOKS

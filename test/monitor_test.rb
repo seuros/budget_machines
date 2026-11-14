@@ -189,6 +189,9 @@ class MonitorTest < Minitest::Test
     m.freeze
     assert_raises(FrozenError) { m.add_rule(Rule.new(1000, 1000, 0)) }
     assert_raises(FrozenError) { m.evaluate(0, [pair(HOT, HOT), pair(HOT, HOT)]) }
+    # Frozen is checked first, before the arguments are read.
+    assert_raises(FrozenError) { m.evaluate(1.5, :windows) }
+    assert_raises(FrozenError) { m.add_rule(:rule) }
     assert_equal %i[no_data no_data], [m.state(0), m.state(1)]
   end
 

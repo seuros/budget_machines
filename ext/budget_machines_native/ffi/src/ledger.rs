@@ -3,9 +3,10 @@ use std::cell::RefCell;
 
 use budget_machines::{Account, Standing};
 use magnus::{Error, Ruby, Value, prelude::*, typed_data::Obj};
+use matryona_machines::ruby::{integer, keep, symbol};
 
-use crate::classes::{classes, keep};
-use crate::{Number, counts, counts_value, done, objective, objective_value, refusal};
+use crate::classes::classes;
+use crate::{counts, counts_value, done, objective, objective_value, refusal};
 
 #[magnus::wrap(class = "BudgetMachines::Ledger", free_immediately, size)]
 pub struct Ledger {
@@ -16,15 +17,13 @@ pub struct Ledger {
 fn account(ruby: &Ruby, account: Account) -> Result<Value, Error> {
     let classes = classes(ruby)?;
     let standing = match account.standing() {
-        Standing::NoData => ruby.to_symbol("no_data").as_value(),
-        Standing::Within { remaining } => ruby
-            .get_inner(classes.within)
-            .funcall("new", (remaining,))?,
-        Standing::Exhausted { overspent } => ruby
-            .get_inner(classes.exhausted)
-            .funcall("new", (overspent,))?,
+        Standing::NoData => symbol(ruby, "no_data").as_value(),
+        Standing::Within { remaining } => classes.within.get(ruby).funcall("new", (remaining,))?,
+        Standing::Exhausted { overspent } => {
+            classes.exhausted.get(ruby).funcall("new", (overspent,))?
+        }
     };
-    ruby.get_inner(classes.account).funcall(
+    classes.account.get(ruby).funcall(
         "new",
         (
             account.period(),
@@ -38,8 +37,9 @@ fn account(ruby: &Ruby, account: Account) -> Result<Value, Error> {
 }
 
 impl Ledger {
-    pub fn new(ruby: &Ruby, target: Value, period: Number) -> Result<Self, Error> {
-        let core = budget_machines::Ledger::new(objective(ruby, target)?, period.0);
+    pub fn new(ruby: &Ruby, target: Value, period: Value) -> Result<Self, Error> {
+        let period = integer(period, "period")?;
+        let core = budget_machines::Ledger::new(objective(ruby, target)?, period);
         Ok(Self {
             core: RefCell::new(core),
         })
@@ -62,33 +62,37 @@ impl Ledger {
     pub fn record(
         ruby: &Ruby,
         this: Obj<Self>,
-        period: Number,
+        period: Value,
         window: Value,
     ) -> Result<Value, Error> {
         this.check_frozen()?;
+        let period = integer(period, "period")?;
         let counts = counts(ruby, window)?;
-        let outcome = this.core.borrow_mut().record(period.0, counts);
+        let outcome = this.core.borrow_mut().record(period, counts);
         Ok(done(ruby, outcome))
     }
 
     pub fn replace(
         ruby: &Ruby,
         this: Obj<Self>,
-        period: Number,
+        period: Value,
         reading: Value,
     ) -> Result<Value, Error> {
         this.check_frozen()?;
+        let period = integer(period, "period")?;
         let counts = counts(ruby, reading)?;
-        let outcome = this.core.borrow_mut().replace(period.0, counts);
+        let outcome = this.core.borrow_mut().replace(period, counts);
         Ok(done(ruby, outcome))
     }
 
-    pub fn roll(ruby: &Ruby, this: Obj<Self>, period: Number) -> Result<Value, Error> {
+    pub fn roll(ruby: &Ruby, this: Obj<Self>, period: Value) -> Result<Value, Error> {
+        this.check_frozen()?;
+        let period = integer(period, "period")?;
         keep(
             ruby,
             this,
             &this.core,
-            |core| core.roll(period.0),
+            |core| core.roll(period),
             |outcome| match outcome {
                 Ok(closed) => account(ruby, closed),
                 Err(refused) => Ok(refusal(ruby, refused)),
@@ -101,8 +105,9 @@ impl Ledger {
         account(ruby, current)
     }
 
-    pub fn account_against(ruby: &Ruby, this: &Self, planned: Number) -> Result<Value, Error> {
-        let outcome = this.core.borrow().account_against(planned.0);
+    pub fn account_against(ruby: &Ruby, this: &Self, planned: Value) -> Result<Value, Error> {
+        let planned = integer(planned, "planned")?;
+        let outcome = this.core.borrow().account_against(planned);
         match outcome {
             Ok(planned) => account(ruby, planned),
             Err(refused) => Ok(refusal(ruby, refused)),

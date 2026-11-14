@@ -3,30 +3,16 @@ extern crate std;
 use core::time::Duration;
 use std::vec::Vec;
 
+use matryona_machines::testing::{XorShift64, refuses};
+
 use super::*;
 
 mod model;
 mod values;
 
-/// Xorshift64: a deterministic stream for the randomized tests.
-struct Rng(u64);
-
-impl Rng {
-    const fn next(&mut self) -> u64 {
-        self.0 ^= self.0 << 13;
-        self.0 ^= self.0 >> 7;
-        self.0 ^= self.0 << 17;
-        self.0
-    }
-
-    const fn below(&mut self, bound: u64) -> u64 {
-        self.next() % bound
-    }
-
-    /// A draw in `0..bound`, narrowed to `u32`.
-    fn below_u32(&mut self, bound: u32) -> u32 {
-        u32::try_from(self.below(u64::from(bound))).expect("below a u32 bound")
-    }
+/// A draw of `rng` in `0..bound`, narrowed to `u32`.
+fn below_u32(rng: &mut XorShift64, bound: u32) -> u32 {
+    u32::try_from(rng.below(u64::from(bound))).expect("below a u32 bound")
 }
 
 /// Test time in whole minutes since the epoch the test picked.
@@ -162,15 +148,23 @@ fn ledger_plans_against_a_forecast() {
 fn ledger_refusals_leave_it_untouched() {
     let mut ledger = Ledger::new(objective(9, 10), 5);
     assert_eq!(ledger.record(5, counts(u64::MAX - 1, u64::MAX - 1)), Ok(()));
-    let before = ledger;
-    assert_eq!(ledger.record(4, counts(1, 1)), Err(Refusal::StalePeriod));
-    assert_eq!(ledger.record(6, counts(1, 1)), Err(Refusal::StalePeriod));
-    assert_eq!(ledger.replace(4, counts(1, 1)), Err(Refusal::StalePeriod));
-    assert_eq!(ledger.record(5, counts(2, 2)), Err(Refusal::Overflow));
-    assert_eq!(ledger.record(5, counts(0, 2)), Err(Refusal::Overflow));
-    assert_eq!(ledger.roll(5), Err(Refusal::StalePeriod));
-    assert_eq!(ledger.roll(4), Err(Refusal::StalePeriod));
-    assert_eq!(ledger, before);
+    refuses(&mut ledger, Refusal::StalePeriod, |l| {
+        l.record(4, counts(1, 1))
+    });
+    refuses(&mut ledger, Refusal::StalePeriod, |l| {
+        l.record(6, counts(1, 1))
+    });
+    refuses(&mut ledger, Refusal::StalePeriod, |l| {
+        l.replace(4, counts(1, 1))
+    });
+    refuses(&mut ledger, Refusal::Overflow, |l| {
+        l.record(5, counts(2, 2))
+    });
+    refuses(&mut ledger, Refusal::Overflow, |l| {
+        l.record(5, counts(0, 2))
+    });
+    refuses(&mut ledger, Refusal::StalePeriod, |l| l.roll(5));
+    refuses(&mut ledger, Refusal::StalePeriod, |l| l.roll(4));
     assert_eq!(ledger.record(5, counts(1, 1)), Ok(()));
     let closed = ledger.roll(u64::MAX);
     assert_eq!(
@@ -320,14 +314,13 @@ fn monitor_refusals_leave_it_untouched() {
         monitor.evaluate(t(10), &[hot]).map(|v| v.worst()),
         Ok(Some(0))
     );
-    let before = monitor;
-    assert_eq!(
-        monitor.evaluate(t(9), &[SILENT]),
-        Err(Refusal::TimeRegression)
-    );
-    assert_eq!(monitor.evaluate(t(11), &[]), Err(Refusal::Shape));
-    assert_eq!(monitor.evaluate(t(11), &[hot, hot]), Err(Refusal::Shape));
-    assert_eq!(monitor, before);
+    refuses(&mut monitor, Refusal::TimeRegression, |m| {
+        m.evaluate(t(9), &[SILENT])
+    });
+    refuses(&mut monitor, Refusal::Shape, |m| m.evaluate(t(11), &[]));
+    refuses(&mut monitor, Refusal::Shape, |m| {
+        m.evaluate(t(11), &[hot, hot])
+    });
     assert_eq!(monitor.last(), Some(t(10)));
     // The same instant may be evaluated again; the last one is a valid instant.
     assert_eq!(

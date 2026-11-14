@@ -3,7 +3,7 @@
 
 use core::time::Duration;
 
-use super::{Rng, SILENT, counts, objective, pair, rule, t};
+use super::{SILENT, XorShift64, counts, objective, pair, rule, t};
 use crate::{Account, Change, Decision, Ledger, Monitor, OnNoData, Standing, State, Verdict};
 
 fn rebuilt(account: Account) -> Option<Account> {
@@ -29,9 +29,9 @@ fn again(decision: Decision) -> Option<Decision> {
 
 #[test]
 fn allowance_matches_the_wide_formula() {
-    let mut rng = Rng(0x9E37_79B9_7F4A_7C15);
+    let mut rng = XorShift64::new(0x9E37_79B9_7F4A_7C15);
     for _ in 0..20_000 {
-        let seed = rng.next();
+        let seed = rng.next_u64();
         let per = u32::try_from(seed >> 40).unwrap_or(u32::MAX).max(1);
         let good = u32::try_from(seed & 0xFFFF_FFFF).unwrap_or(0) % per;
         let total = seed.rotate_left(17);

@@ -113,6 +113,63 @@ class ValuesTest < Minitest::Test
   def test_an_opened_singleton_class_is_still_the_gems_value
     reading = Counts.new(9, 10).tap(&:singleton_class)
     assert_equal :ok, Ledger.new(SLO, 1).record(1, reading)
+    assert_equal :ok, Ledger.new(SLO, 1).record(1, reading.clone)
+    ledger = Ledger.new(SLO, 1)
+    ledger.record(1, Counts.new(1000, 1000))
+    account = ledger.account
+    within = Standing::Within.new(account.standing.remaining).tap(&:singleton_class)
+    assert_equal account, Account.new(*account.deconstruct[0..3], within.clone, account.consumed_milli)
+  end
+
+  def test_messages_name_the_argument
+    subarray = Class.new(Array)
+    {
+      -> { Counts.new(1.5, 2) } => [TypeError, 'good must be an Integer'],
+      -> { Objective.new(1, 2**32) } => [RangeError, 'per must be in 0..=4294967295'],
+      -> { Rule.new(10, 5, 256) } => [RangeError, 'severity must be in 0..=255'],
+      -> { Standing::Exhausted.new(-1) } => [RangeError, "overspent must be in 0..=#{(2**64) - 1}"],
+      -> { Monitor.new(SLO, :hold, 0).evaluate(1.0, []) } => [TypeError, 'now must be an Integer'],
+      -> { Monitor.new(SLO, :maybe, 0) } => [RangeError, 'policy must be one of :hold, :reset, :fire'],
+      -> { Decision.new('quiet', :none, nil, nil, nil) } => [TypeError, 'state must be a Symbol'],
+      -> { Monitor.new(SLO, :hold, 0).evaluate(0, subarray.new) } => [TypeError, 'windows must be an Array of Windows'],
+      -> { Verdict.new(subarray.new, nil) } => [TypeError, 'decisions must be an Array of Decision']
+    }.each do |call, (error, message)|
+      assert_equal message, assert_raises(error, &call).message
+    end
+  end
+
+  # Fields are read from the struct itself: a redefined reader never runs.
+  def test_redefined_readers_are_ignored
+    reading = Counts.new(9, 10)
+    ledger = Ledger.new(SLO, 1)
+    ledger.record(1, Counts.new(1000, 1000))
+    fields = ledger.account.deconstruct
+    windows = Windows.new(HOT, HOT)
+    rule = Rule.new(1000, 1000, 0)
+    decision = Decision.new(:quiet, :none, nil, nil, nil)
+    with_raising_readers(Counts, Objective, Rule, Sample::Counts, Windows, Decision, Standing::Within) do
+      assert_equal :ok, Ledger.new(SLO, 1).record(1, reading)
+      monitor = Monitor.new(SLO, :hold, 0)
+      assert_equal 0, monitor.add_rule(rule)
+      assert_instance_of Verdict, monitor.evaluate(1, [windows])
+      assert_instance_of Verdict, Verdict.new([decision], nil)
+      assert_instance_of Account, Account.new(*fields)
+      assert_equal 1000, SLO.allowance(100_000)
+    end
+  end
+
+  # Every reader of `classes` raises while the block runs.
+  def with_raising_readers(*classes)
+    saved = classes.flat_map { |klass| klass.members.map { |name| [klass, name, klass.instance_method(name)] } }
+    verbose = $VERBOSE
+    $VERBOSE = nil
+    saved.each { |klass, name, _| klass.define_method(name) { raise 'the binding ran a reader' } }
+    $VERBOSE = verbose
+    yield
+  ensure
+    $VERBOSE = nil
+    saved.each { |klass, name, method| klass.define_method(name, method) }
+    $VERBOSE = verbose
   end
 
   def test_a_marshal_forged_value_never_reaches_the_core

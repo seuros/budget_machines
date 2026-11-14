@@ -1,14 +1,17 @@
 //! The private hooks every `Data` value validates through at construction, so
 //! a value built by hand is held to the core's constructors exactly like one
 //! the gem returned.
-use budget_machines::{Account, Change, Decision, Standing, State, Verdict};
-use magnus::{Error, Integer, RArray, Ruby, Symbol, Value, prelude::*};
+use std::time::Duration;
 
-use crate::classes::{classes, exact, field, is};
-use crate::{
-    CAPACITY, Nanos, Number, Small, counts, counts_value, monitor, nanos, pair, range_error, ratio,
-    type_error,
+use budget_machines::{Account, Decision, Standing, Verdict};
+use magnus::{Error, Integer, RArray, Ruby, Symbol, Value, prelude::*};
+use matryona_machines::ruby::{
+    Symbols, exact_array, exact_fields, instance_of, integer, nanoseconds, optional,
 };
+
+use crate::classes::classes;
+use crate::monitor::{self, Changes, States};
+use crate::{CAPACITY, counts, counts_value, pair, range_error, ratio};
 
 /// What `Account.new` stores, in field order.
 type AccountFields = (u64, Value, u64, u64, Value, Option<u64>);
@@ -16,69 +19,51 @@ type AccountFields = (u64, Value, u64, u64, Value, Option<u64>);
 /// What `Decision.new` stores, in field order.
 type DecisionFields = (Symbol, Symbol, Option<u64>, Option<u64>, Option<Integer>);
 
-/// The name of a Symbol, or `TypeError`.
-pub fn symbol_name(ruby: &Ruby, value: Value, message: &'static str) -> Result<String, Error> {
-    let symbol = Symbol::from_value(value).ok_or_else(|| type_error(ruby, message))?;
-    Ok(symbol.name()?.into_owned())
-}
-
-fn state(ruby: &Ruby, value: Value) -> Result<State, Error> {
-    match symbol_name(ruby, value, "a rule state is a Symbol")?.as_str() {
-        "no_data" => Ok(State::NoData),
-        "quiet" => Ok(State::Quiet),
-        "firing" => Ok(State::Firing),
-        _ => Err(range_error(
-            ruby,
-            "a rule state is :no_data, :quiet or :firing",
-        )),
-    }
-}
-
-fn change(ruby: &Ruby, value: Value) -> Result<Change, Error> {
-    match symbol_name(ruby, value, "a change is a Symbol")?.as_str() {
-        "none" => Ok(Change::None),
-        "raised" => Ok(Change::Raised),
-        "cleared" => Ok(Change::Cleared),
-        _ => Err(range_error(ruby, "a change is :none, :raised or :cleared")),
-    }
-}
+/// A `Decision`'s optional fields as the core takes them, in field order.
+type Marks = (Option<u64>, Option<u64>, Option<Duration>);
 
 fn standing(ruby: &Ruby, value: Value) -> Result<Standing, Error> {
     const MESSAGE: &str = "a standing is :no_data, a Standing::Within or a Standing::Exhausted";
-    if Symbol::from_value(value).is_some() {
-        return match symbol_name(ruby, value, MESSAGE)?.as_str() {
+    if let Some(name) = Symbol::from_value(value) {
+        return match &*name.name()? {
             "no_data" => Ok(Standing::NoData),
             _ => Err(range_error(ruby, MESSAGE)),
         };
     }
     let classes = classes(ruby)?;
-    if is(ruby, value, classes.within) {
-        let remaining: Number = field(exact(ruby, value, classes.within, MESSAGE)?, 0)?;
-        return Ok(Standing::Within {
-            remaining: remaining.0,
-        });
+    let within = classes.within.get(ruby);
+    if instance_of(value, within) {
+        let [remaining] = exact_fields::<1>(ruby, value, within, MESSAGE)?;
+        let remaining = integer(remaining, "remaining")?;
+        return Ok(Standing::Within { remaining });
     }
-    let overspent: Number = field(exact(ruby, value, classes.exhausted, MESSAGE)?, 0)?;
-    Ok(Standing::Exhausted {
-        overspent: overspent.0,
-    })
+    let [overspent] = exact_fields::<1>(ruby, value, classes.exhausted.get(ruby), MESSAGE)?;
+    let overspent = integer(overspent, "overspent")?;
+    Ok(Standing::Exhausted { overspent })
+}
+
+/// The optional fields of a `Decision`, converted in field order.
+fn marks(long_milli: Value, short_milli: Value, since: Value) -> Result<Marks, Error> {
+    let long_milli = optional(long_milli, "long_milli")?;
+    let short_milli = optional(short_milli, "short_milli")?;
+    let since = optional(since, "since")?.map(Duration::from_nanos);
+    Ok((long_milli, short_milli, since))
 }
 
 /// A core `Decision` from Ruby field values, as `Decision::new` judges them.
+/// The optional fields are converted first, then the two Symbols.
 fn build_decision(
     ruby: &Ruby,
     held_state: Value,
     held_change: Value,
-    long_milli: Option<Number>,
-    short_milli: Option<Number>,
-    since: Option<Nanos>,
+    (long_milli, short_milli, since): Marks,
 ) -> Result<Decision, Error> {
     Decision::new(
-        state(ruby, held_state)?,
-        change(ruby, held_change)?,
-        long_milli.map(|milli| milli.0),
-        short_milli.map(|milli| milli.0),
-        since.map(|since| since.0),
+        States::parse(ruby, held_state)?,
+        Changes::parse(ruby, held_change)?,
+        long_milli,
+        short_milli,
+        since,
     )
     .ok_or_else(|| range_error(ruby, "no evaluation produces this decision"))
 }
@@ -86,33 +71,25 @@ fn build_decision(
 /// The fields `Decision.new` takes for a core decision, in order.
 pub fn decision_fields(ruby: &Ruby, decision: &Decision) -> DecisionFields {
     (
-        ruby.to_symbol(monitor::state_name(decision.state())),
-        ruby.to_symbol(monitor::change_name(decision.change())),
+        States::symbol(ruby, decision.state()),
+        Changes::symbol(ruby, decision.change()),
         decision.long_milli(),
         decision.short_milli(),
-        decision.since().map(|since| nanos(ruby, since)),
+        decision.since().map(|since| nanoseconds(ruby, since)),
     )
 }
 
 fn decision(ruby: &Ruby, value: Value) -> Result<Decision, Error> {
-    let held = exact(
-        ruby,
-        value,
-        classes(ruby)?.decision,
-        "expected a BudgetMachines::Decision",
-    )?;
-    build_decision(
-        ruby,
-        field(held, 0)?,
-        field(held, 1)?,
-        field(held, 2)?,
-        field(held, 3)?,
-        field(held, 4)?,
-    )
+    let class = classes(ruby)?.decision.get(ruby);
+    let [state, change, long_milli, short_milli, since] =
+        exact_fields::<5>(ruby, value, class, "expected a BudgetMachines::Decision")?;
+    let fields = marks(long_milli, short_milli, since)?;
+    build_decision(ruby, state, change, fields)
 }
 
-fn checked_counts(ruby: &Ruby, good: Number, total: Number) -> Result<(u64, u64), Error> {
-    pair(ruby, good, total).map(|counts| (counts.good(), counts.total()))
+fn checked_counts(ruby: &Ruby, good: Value, total: Value) -> Result<(u64, u64), Error> {
+    let good = integer(good, "good")?;
+    pair(ruby, good, integer(total, "total")?).map(|counts| (counts.good(), counts.total()))
 }
 
 fn checked_add(ruby: &Ruby, left: Value, right: Value) -> Result<Option<Value>, Error> {
@@ -120,22 +97,30 @@ fn checked_add(ruby: &Ruby, left: Value, right: Value) -> Result<Option<Value>, 
     sum.map(|sum| counts_value(ruby, sum)).transpose()
 }
 
-fn checked_objective(ruby: &Ruby, good: Small, per: Small) -> Result<(u32, u32), Error> {
-    ratio(ruby, good, per).map(|objective| (objective.good(), objective.per()))
+fn checked_objective(ruby: &Ruby, good: Value, per: Value) -> Result<(u32, u32), Error> {
+    let good = integer(good, "good")?;
+    let objective = ratio(ruby, good, integer(per, "per")?)?;
+    Ok((objective.good(), objective.per()))
 }
 
 fn checked_rule(
     ruby: &Ruby,
-    fire_milli: Small,
-    clear_milli: Small,
-    severity: Number,
+    fire_milli: Value,
+    clear_milli: Value,
+    severity: Value,
 ) -> Result<(u32, u32, u8), Error> {
     let rule = monitor::checked_rule(ruby, fire_milli, clear_milli, severity)?;
     Ok((rule.fire_milli(), rule.clear_milli(), rule.severity()))
 }
 
-const fn checked_u64(value: Number) -> u64 {
-    value.0
+/// What `Standing::Within.new` stores.
+fn checked_remaining(remaining: Value) -> Result<u64, Error> {
+    integer(remaining, "remaining")
+}
+
+/// What `Standing::Exhausted.new` stores.
+fn checked_overspent(overspent: Value) -> Result<u64, Error> {
+    integer(overspent, "overspent")
 }
 
 fn checked_sample(ruby: &Ruby, window: Value) -> Result<Value, Error> {
@@ -151,20 +136,24 @@ fn checked_windows(ruby: &Ruby, long: Value, short: Value) -> Result<(Value, Val
 
 fn checked_account(
     ruby: &Ruby,
-    period: Number,
+    period: Value,
     window: Value,
-    base: Number,
-    allowance: Number,
+    base: Value,
+    allowance: Value,
     held: Value,
-    consumed_milli: Option<Number>,
+    consumed_milli: Value,
 ) -> Result<AccountFields, Error> {
+    let period = integer(period, "period")?;
+    let base = integer(base, "base")?;
+    let allowance = integer(allowance, "allowance")?;
+    let consumed_milli = optional(consumed_milli, "consumed_milli")?;
     let account = Account::new(
-        period.0,
+        period,
         counts(ruby, window)?,
-        base.0,
-        allowance.0,
+        base,
+        allowance,
         standing(ruby, held)?,
-        consumed_milli.map(|milli| milli.0),
+        consumed_milli,
     )
     .ok_or_else(|| range_error(ruby, "no ledger produces this account"))?;
     Ok((
@@ -181,28 +170,22 @@ fn checked_decision(
     ruby: &Ruby,
     held_state: Value,
     held_change: Value,
-    long_milli: Option<Number>,
-    short_milli: Option<Number>,
-    since: Option<Nanos>,
+    long_milli: Value,
+    short_milli: Value,
+    since: Value,
 ) -> Result<DecisionFields, Error> {
-    let decision = build_decision(
-        ruby,
-        held_state,
-        held_change,
-        long_milli,
-        short_milli,
-        since,
-    )?;
+    let fields = marks(long_milli, short_milli, since)?;
+    let decision = build_decision(ruby, held_state, held_change, fields)?;
     Ok(decision_fields(ruby, &decision))
 }
 
 fn checked_verdict(
     ruby: &Ruby,
     decisions: Value,
-    worst: Option<Number>,
+    worst: Value,
 ) -> Result<(RArray, Option<u64>), Error> {
-    let rows = RArray::from_value(decisions)
-        .ok_or_else(|| type_error(ruby, "decisions must be an Array of Decision"))?;
+    let worst: Option<u64> = optional(worst, "worst")?;
+    let rows = exact_array(ruby, decisions, "decisions must be an Array of Decision")?;
     let held = ruby.ary_new_capa(rows.len());
     let mut parsed = Vec::with_capacity(rows.len());
     for index in 0..rows.len() {
@@ -210,7 +193,7 @@ fn checked_verdict(
         parsed.push(decision(ruby, row)?);
         held.push(row)?;
     }
-    let worst = worst.map(|index| usize::try_from(index.0).unwrap_or(usize::MAX));
+    let worst = worst.map(|index| usize::try_from(index).unwrap_or(usize::MAX));
     let verdict = Verdict::<CAPACITY>::new(&parsed, worst)
         .ok_or_else(|| range_error(ruby, "no evaluation produces this verdict"))?;
     held.freeze();
@@ -225,7 +208,8 @@ pub fn define(ruby: &Ruby) -> Result<(), Error> {
     module.define_singleton_method("__checked_add", function!(checked_add, 2))?;
     module.define_singleton_method("__objective", function!(checked_objective, 2))?;
     module.define_singleton_method("__rule", function!(checked_rule, 3))?;
-    module.define_singleton_method("__u64", function!(checked_u64, 1))?;
+    module.define_singleton_method("__remaining", function!(checked_remaining, 1))?;
+    module.define_singleton_method("__overspent", function!(checked_overspent, 1))?;
     module.define_singleton_method("__sample", function!(checked_sample, 1))?;
     module.define_singleton_method("__windows", function!(checked_windows, 2))?;
     module.define_singleton_method("__account", function!(checked_account, 6))?;

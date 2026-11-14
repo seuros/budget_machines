@@ -10,5 +10,8 @@ exclude = ["src/**/tests.rs", "src/tests/", "tests/"]
 keywords = ["slo", "error-budget", "burn-rate", "alerting", "no-std"]
 categories = ["no-std", "algorithms"]
 
+[dev-dependencies]
+matryona-machines = { workspace = true, features = ["testing"] }
+
 [lints]
 workspace = true

@@ -2,7 +2,7 @@
 
 use core::time::Duration;
 
-use super::{Rng, counts, objective, rule, std::vec::Vec};
+use super::{XorShift64, below_u32, counts, objective, rule, std::vec::Vec};
 use crate::{Change, Ledger, Monitor, OnNoData, Refusal, Sample, Standing, State, Windows};
 
 /// Burn rate by long division, sharing nothing with the division-free test.
@@ -52,7 +52,7 @@ fn naive_state(
     state
 }
 
-fn random_sample(rng: &mut Rng) -> (Sample, Option<(u64, u64)>) {
+fn random_sample(rng: &mut XorShift64) -> (Sample, Option<(u64, u64)>) {
     if rng.below(6) == 0 {
         return (Sample::NoData, None);
     }
@@ -72,19 +72,19 @@ fn random_sample(rng: &mut Rng) -> (Sample, Option<(u64, u64)>) {
 #[test]
 fn monitor_matches_a_naive_replay_model() {
     const RULES: usize = 3;
-    let mut rng = Rng(0x9E37_79B9_7F4A_7C15);
+    let mut rng = XorShift64::new(0x9E37_79B9_7F4A_7C15);
     let mut raised = 0_u32;
     let mut cleared = 0_u32;
     for round in 0..300 {
-        let per = rng.below_u32(50) + 2;
-        let good = rng.below_u32(per);
+        let per = below_u32(&mut rng, 50) + 2;
+        let good = below_u32(&mut rng, per);
         let policy = [OnNoData::Hold, OnNoData::Reset, OnNoData::Fire][round % 3];
         let floor = rng.below(8);
         let mut monitor = Monitor::<RULES>::new(objective(good, per), policy, floor);
         let mut rules = Vec::new();
         for _ in 0..RULES {
-            let fire = rng.below_u32(6000) + 1;
-            let clear = rng.below_u32(fire) + 1;
+            let fire = below_u32(&mut rng, 6000) + 1;
+            let clear = below_u32(&mut rng, fire) + 1;
             assert!(monitor.add_rule(rule(fire, clear, 0)).is_ok());
             rules.push((fire, clear));
         }
@@ -143,11 +143,11 @@ fn monitor_matches_a_naive_replay_model() {
 
 #[test]
 fn ledger_matches_a_naive_model() {
-    let mut rng = Rng(0xD1B5_4A32_D192_ED03);
+    let mut rng = XorShift64::new(0xD1B5_4A32_D192_ED03);
     let mut seen = [0_u32; 3];
     for _ in 0..400 {
-        let per = rng.below_u32(60) + 2;
-        let good = rng.below_u32(per);
+        let per = below_u32(&mut rng, 60) + 2;
+        let good = below_u32(&mut rng, per);
         let mut period = rng.below(5);
         let mut ledger = Ledger::new(objective(good, per), period);
         let (mut ok, mut total) = (0_u64, 0_u64);
