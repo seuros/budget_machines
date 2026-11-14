@@ -6,12 +6,12 @@ use std::time::Duration;
 use budget_machines::{Account, Decision, Standing, Verdict};
 use magnus::{Error, Integer, RArray, Ruby, Symbol, Value, prelude::*};
 use matryona_machines::ruby::{
-    Symbols, exact_array, exact_fields, instance_of, integer, nanoseconds, optional,
+    Symbols, exact_array, exact_fields, integer, nanoseconds, optional, which,
 };
 
 use crate::classes::classes;
 use crate::monitor::{self, Changes, States};
-use crate::{CAPACITY, counts, counts_value, pair, range_error, ratio};
+use crate::{CAPACITY, counts, counts_value, pair, range_error, ratio, type_error};
 
 /// What `Account.new` stores, in field order.
 type AccountFields = (u64, Value, u64, u64, Value, Option<u64>);
@@ -31,15 +31,20 @@ fn standing(ruby: &Ruby, value: Value) -> Result<Standing, Error> {
         };
     }
     let classes = classes(ruby)?;
-    let within = classes.within.get(ruby);
-    if instance_of(value, within) {
-        let [remaining] = exact_fields::<1>(ruby, value, within, MESSAGE)?;
-        let remaining = integer(remaining, "remaining")?;
-        return Ok(Standing::Within { remaining });
-    }
-    let [overspent] = exact_fields::<1>(ruby, value, classes.exhausted.get(ruby), MESSAGE)?;
-    let overspent = integer(overspent, "overspent")?;
-    Ok(Standing::Exhausted { overspent })
+    let held = [classes.within.get(ruby), classes.exhausted.get(ruby)];
+    let Some(index) = which(value, &held) else {
+        return Err(type_error(ruby, MESSAGE));
+    };
+    let [field] = exact_fields::<1>(ruby, value, held[index], MESSAGE)?;
+    Ok(if index == 0 {
+        Standing::Within {
+            remaining: integer(field, "remaining")?,
+        }
+    } else {
+        Standing::Exhausted {
+            overspent: integer(field, "overspent")?,
+        }
+    })
 }
 
 /// The optional fields of a `Decision`, converted in field order.

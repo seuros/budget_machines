@@ -46,6 +46,10 @@ class ValuesTest < Minitest::Test
     ].each { |fields| assert_raises(RangeError) { Account.new(*fields) } }
     assert_raises(TypeError) { Account.new(1, [4, 5], 5, 1, within, 1000) }
     assert_raises(TypeError) { Account.new(1, five, 5, 1, 'within', 1000) }
+    message = 'a standing is :no_data, a Standing::Within or a Standing::Exhausted'
+    [five, Struct.new(:remaining).new(0), nil].each do |forged|
+      assert_equal message, assert_raises(TypeError) { Account.new(1, five, 5, 1, forged, 1000) }.message
+    end
     assert_raises(TypeError) { Account.new(1, five, 5.0, 1, within, 1000) }
     assert_raises(RangeError) { Standing::Within.new(-1) }
     assert_raises(RangeError) { Standing::Exhausted.new(2**64) }
