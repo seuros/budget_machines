@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.2](https://github.com/seuros/budget_machines/compare/budget_machines/v0.4.1...budget_machines/v0.4.2) (2026-11-14)
+
+
+### Bug Fixes
+
+* **deps:** require matryona-machines &gt;= 0.4 and read standings and samples through names_only tables ([35a80c6](https://github.com/seuros/budget_machines/commit/35a80c6ff26785feacd96628ef4d17fb3654e634))
+
 ## [0.4.1](https://github.com/seuros/budget_machines/compare/budget_machines/v0.4.0...budget_machines/v0.4.1) (2026-11-14)
 
 
