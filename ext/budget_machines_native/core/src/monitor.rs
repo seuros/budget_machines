@@ -103,25 +103,86 @@ pub enum Change {
 /// One rule's outcome for one evaluation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Decision {
+    state: State,
+    change: Change,
+    long_milli: Option<u64>,
+    short_milli: Option<u64>,
+    since: Option<Duration>,
+}
+
+impl Decision {
+    /// A decision rebuilt from its fields, or `None` when no evaluation could
+    /// have produced it: `Raised` lands in `Firing` and `Cleared` leaves it;
+    /// an alert edge has the instant it happened; a decision with both burn
+    /// rates was measured, so its state is `Quiet` or `Firing`.
+    #[must_use]
+    pub const fn new(
+        state: State,
+        change: Change,
+        long_milli: Option<u64>,
+        short_milli: Option<u64>,
+        since: Option<Duration>,
+    ) -> Option<Self> {
+        let firing = matches!(state, State::Firing);
+        let edge = match change {
+            Change::None => true,
+            Change::Raised => firing && since.is_some(),
+            Change::Cleared => !firing && since.is_some(),
+        };
+        let measured = long_milli.is_some() && short_milli.is_some();
+        if !edge || (measured && matches!(state, State::NoData)) {
+            return None;
+        }
+        Some(Self {
+            state,
+            change,
+            long_milli,
+            short_milli,
+            since,
+        })
+    }
+
     /// State after the evaluation.
-    pub state: State,
+    #[must_use]
+    pub const fn state(&self) -> State {
+        self.state
+    }
+
     /// Alert edge, if any.
-    pub change: Change,
-    /// Whether both windows had data. `false` means `state` came from the
-    /// no-data policy, not from a measurement.
-    pub measured: bool,
+    #[must_use]
+    pub const fn change(&self) -> Change {
+        self.change
+    }
+
+    /// Whether both windows had data, so both burn rates are known. `false`
+    /// means `state` came from the no-data policy, not from a measurement.
+    #[must_use]
+    pub const fn measured(&self) -> bool {
+        self.long_milli.is_some() && self.short_milli.is_some()
+    }
+
     /// Long-window burn rate in thousandths; `None` without data.
-    pub long_milli: Option<u64>,
+    #[must_use]
+    pub const fn long_milli(&self) -> Option<u64> {
+        self.long_milli
+    }
+
     /// Short-window burn rate in thousandths; `None` without data.
-    pub short_milli: Option<u64>,
+    #[must_use]
+    pub const fn short_milli(&self) -> Option<u64> {
+        self.short_milli
+    }
+
     /// Instant the rule entered `state`; `None` if it never left its start.
-    pub since: Option<Duration>,
+    #[must_use]
+    pub const fn since(&self) -> Option<Duration> {
+        self.since
+    }
 }
 
 const UNDECIDED: Decision = Decision {
     state: State::NoData,
     change: Change::None,
-    measured: false,
     long_milli: None,
     short_milli: None,
     since: None,
@@ -136,10 +197,35 @@ pub struct Verdict<const R: usize> {
 }
 
 impl<const R: usize> Verdict<R> {
+    /// A verdict rebuilt from its parts, or `None` when no evaluation could
+    /// have produced it: more than `R` decisions, or a `worst` that is not
+    /// the index of a firing decision, or no `worst` while one fires.
+    #[must_use]
+    pub fn new(decisions: &[Decision], worst: Option<usize>) -> Option<Self> {
+        let mut held = [UNDECIDED; R];
+        held.get_mut(..decisions.len())?.copy_from_slice(decisions);
+        let firing = decisions
+            .iter()
+            .any(|decision| decision.state == State::Firing);
+        let named = worst.map_or(!firing, |index| {
+            decisions
+                .get(index)
+                .is_some_and(|decision| decision.state == State::Firing)
+        });
+        named.then_some(Self {
+            decisions: held,
+            len: decisions.len(),
+            worst,
+        })
+    }
+
     /// One decision per rule.
     #[must_use]
     pub fn decisions(&self) -> &[Decision] {
-        self.decisions.get(..self.len).unwrap_or(&[])
+        self.decisions.get(..self.len).unwrap_or_else(|| {
+            debug_assert!(false, "a verdict holds at most R decisions");
+            &[]
+        })
     }
 
     /// Index of the firing rule with the highest severity; the earliest rule
@@ -331,7 +417,6 @@ fn judge(
     Decision {
         state,
         change,
-        measured: long.is_some() && short.is_some(),
         long_milli: long.and_then(|counts| objective.burn_milli(counts)),
         short_milli: short.and_then(|counts| objective.burn_milli(counts)),
         since: slot.since,

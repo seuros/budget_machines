@@ -31,7 +31,10 @@ class LedgerTest < Minitest::Test
     assert_raises(TypeError) { slo.burn_milli_of(nil, 1) }
     assert_raises(TypeError) { slo.burns_at_least(counts(1, 1), 1.0) }
     assert_predicate slo, :frozen?
-    %i[__allowance __burn_milli_of __burns_at_least].each do |name|
+    %i[
+      __allowance __burn_milli_of __burn_milli __burns_at_least __counts __checked_add __objective
+      __rule __u64 __sample __windows __account __decision __verdict
+    ].each do |name|
       assert_raises(NoMethodError) { BudgetMachines.public_send(name) }
     end
   end
@@ -45,6 +48,8 @@ class LedgerTest < Minitest::Test
     assert_raises(RangeError) { counts(0, 2**64) }
     assert_raises(RangeError) { counts(-1, 1) }
     [1.0, nil, '1'].each { |value| assert_raises(TypeError) { counts(value, 1) } }
+    assert_raises(TypeError) { window.checked_add([1, 1]) }
+    assert_raises(TypeError) { Objective.new(99, 100).burn_milli(Sample::Counts.new(window)) }
   end
 
   def test_accounting_from_no_data_to_exhausted
@@ -54,7 +59,7 @@ class LedgerTest < Minitest::Test
     empty = ledger.account
     assert_instance_of Account, empty
     assert_equal :no_data, empty.standing
-    assert_predicate empty, :no_data?
+    assert_equal :no_data, empty.standing
     assert_nil empty.consumed_milli
 
     assert_equal :ok, ledger.record(7, counts(995, 1000))
@@ -65,14 +70,14 @@ class LedgerTest < Minitest::Test
       standing: Standing::Within.new(remaining: 5), consumed_milli: 500
     ), account
     assert_equal %i[period counts base allowance standing consumed_milli], Account.members
-    assert_predicate account, :within?
-    refute_predicate account, :exhausted?
+    assert_kind_of Standing::Within, account.standing
+    refute_kind_of Standing::Exhausted, account.standing
     assert_predicate account, :frozen?
 
     assert_equal :ok, ledger.record(7, counts(0, 6))
     spent = ledger.account
     assert_equal Standing::Exhausted.new(overspent: 1), spent.standing
-    assert_predicate spent, :exhausted?
+    assert_kind_of Standing::Exhausted, spent.standing
 
     assert_equal :ok, ledger.replace(7, counts(1000, 1000))
     assert_equal Standing::Within.new(remaining: 10), ledger.account.standing
@@ -81,7 +86,7 @@ class LedgerTest < Minitest::Test
   def test_account_against_a_planned_total
     ledger = Ledger.new(Objective.new(999, 1000), 0)
     ledger.record(0, counts(9, 10))
-    assert_predicate ledger.account, :exhausted?
+    assert_kind_of Standing::Exhausted, ledger.account.standing
     planned = ledger.account_against(100_000)
     assert_equal [100_000, 100, Standing::Within.new(99), 10],
                  [planned.base, planned.allowance, planned.standing, planned.consumed_milli]
@@ -109,7 +114,7 @@ class LedgerTest < Minitest::Test
     closed = ledger.roll(MAX)
     assert_equal [5, counts(8, 10), Standing::Exhausted.new(1)], [closed.period, closed.counts, closed.standing]
     assert_equal [MAX, counts(0, 0)], [ledger.period, ledger.counts]
-    assert_predicate ledger.account, :no_data?
+    assert_equal :no_data, ledger.account.standing
     assert_equal :stale_period, ledger.record(5, counts(1, 1))
   end
 
@@ -138,7 +143,7 @@ class LedgerTest < Minitest::Test
     assert_raises(FrozenError) { ledger.record(0, counts(1, 1)) }
     assert_raises(FrozenError) { ledger.replace(0, counts(1, 1)) }
     assert_raises(FrozenError) { ledger.roll(1) }
-    assert_predicate ledger.account, :within?
-    assert_predicate ledger.account_against(10), :within?
+    assert_kind_of Standing::Within, ledger.account.standing
+    assert_kind_of Standing::Within, ledger.account_against(10).standing
   end
 end

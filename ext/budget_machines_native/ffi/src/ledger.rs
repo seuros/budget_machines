@@ -4,29 +4,35 @@ use std::cell::RefCell;
 use budget_machines::{Account, Standing};
 use magnus::{Error, Ruby, Value, prelude::*, typed_data::Obj};
 
-use crate::{Number, counts, counts_value, data, objective, objective_value, refusal};
+use crate::classes::{classes, keep};
+use crate::{Number, counts, counts_value, done, objective, objective_value, refusal};
 
 #[magnus::wrap(class = "BudgetMachines::Ledger", free_immediately, size)]
 pub struct Ledger {
     core: RefCell<budget_machines::Ledger>,
 }
 
+/// A `BudgetMachines::Account` built from a core account, through `new`.
 fn account(ruby: &Ruby, account: Account) -> Result<Value, Error> {
-    let standing = match account.standing {
+    let classes = classes(ruby)?;
+    let standing = match account.standing() {
         Standing::NoData => ruby.to_symbol("no_data").as_value(),
-        Standing::Within { remaining } => data(ruby, "Standing::Within", (remaining,))?,
-        Standing::Exhausted { overspent } => data(ruby, "Standing::Exhausted", (overspent,))?,
+        Standing::Within { remaining } => ruby
+            .get_inner(classes.within)
+            .funcall("new", (remaining,))?,
+        Standing::Exhausted { overspent } => ruby
+            .get_inner(classes.exhausted)
+            .funcall("new", (overspent,))?,
     };
-    data(
-        ruby,
-        "Account",
+    ruby.get_inner(classes.account).funcall(
+        "new",
         (
-            account.period,
-            counts_value(ruby, account.counts)?,
-            account.base,
-            account.allowance,
+            account.period(),
+            counts_value(ruby, account.counts())?,
+            account.base(),
+            account.allowance(),
             standing,
-            account.consumed_milli,
+            account.consumed_milli(),
         ),
     )
 }
@@ -44,11 +50,13 @@ impl Ledger {
     }
 
     pub fn objective(ruby: &Ruby, this: &Self) -> Result<Value, Error> {
-        objective_value(ruby, this.core.borrow().objective())
+        let held = this.core.borrow().objective();
+        objective_value(ruby, held)
     }
 
     pub fn counts(ruby: &Ruby, this: &Self) -> Result<Value, Error> {
-        counts_value(ruby, this.core.borrow().counts())
+        let held = this.core.borrow().counts();
+        counts_value(ruby, held)
     }
 
     pub fn record(
@@ -60,11 +68,7 @@ impl Ledger {
         this.check_frozen()?;
         let counts = counts(ruby, window)?;
         let outcome = this.core.borrow_mut().record(period.0, counts);
-        Ok(match outcome {
-            Ok(()) => ruby.to_symbol("ok"),
-            Err(refused) => refusal(ruby, refused),
-        }
-        .as_value())
+        Ok(done(ruby, outcome))
     }
 
     pub fn replace(
@@ -76,20 +80,20 @@ impl Ledger {
         this.check_frozen()?;
         let counts = counts(ruby, reading)?;
         let outcome = this.core.borrow_mut().replace(period.0, counts);
-        Ok(match outcome {
-            Ok(()) => ruby.to_symbol("ok"),
-            Err(refused) => refusal(ruby, refused),
-        }
-        .as_value())
+        Ok(done(ruby, outcome))
     }
 
     pub fn roll(ruby: &Ruby, this: Obj<Self>, period: Number) -> Result<Value, Error> {
-        this.check_frozen()?;
-        let outcome = this.core.borrow_mut().roll(period.0);
-        match outcome {
-            Ok(closed) => account(ruby, closed),
-            Err(refused) => Ok(refusal(ruby, refused).as_value()),
-        }
+        keep(
+            ruby,
+            this,
+            &this.core,
+            |core| core.roll(period.0),
+            |outcome| match outcome {
+                Ok(closed) => account(ruby, closed),
+                Err(refused) => Ok(refusal(ruby, refused)),
+            },
+        )
     }
 
     pub fn account(ruby: &Ruby, this: &Self) -> Result<Value, Error> {
@@ -101,7 +105,7 @@ impl Ledger {
         let outcome = this.core.borrow().account_against(planned.0);
         match outcome {
             Ok(planned) => account(ruby, planned),
-            Err(refused) => Ok(refusal(ruby, refused).as_value()),
+            Err(refused) => Ok(refusal(ruby, refused)),
         }
     }
 }

@@ -2,23 +2,8 @@
 
 use core::time::Duration;
 
-use super::{counts, objective, rule, std::vec::Vec};
+use super::{Rng, counts, objective, rule, std::vec::Vec};
 use crate::{Change, Ledger, Monitor, OnNoData, Refusal, Sample, Standing, State, Windows};
-
-struct Rng(u64);
-
-impl Rng {
-    fn next(&mut self) -> u64 {
-        self.0 ^= self.0 << 13;
-        self.0 ^= self.0 >> 7;
-        self.0 ^= self.0 << 17;
-        self.0
-    }
-
-    fn below(&mut self, bound: u64) -> u64 {
-        self.next() % bound
-    }
-}
 
 /// Burn rate by long division, sharing nothing with the division-free test.
 fn naive_milli(good: u32, per: u32, sample: Option<(u64, u64)>, floor: u64) -> Option<u128> {
@@ -91,15 +76,15 @@ fn monitor_matches_a_naive_replay_model() {
     let mut raised = 0_u32;
     let mut cleared = 0_u32;
     for round in 0..300 {
-        let per = u32::try_from(rng.below(50) + 2).unwrap_or(2);
-        let good = u32::try_from(rng.below(u64::from(per))).unwrap_or(0);
+        let per = rng.below_u32(50) + 2;
+        let good = rng.below_u32(per);
         let policy = [OnNoData::Hold, OnNoData::Reset, OnNoData::Fire][round % 3];
         let floor = rng.below(8);
         let mut monitor = Monitor::<RULES>::new(objective(good, per), policy, floor);
         let mut rules = Vec::new();
         for _ in 0..RULES {
-            let fire = u32::try_from(rng.below(6000) + 1).unwrap_or(1);
-            let clear = u32::try_from(rng.below(u64::from(fire)) + 1).unwrap_or(1);
+            let fire = rng.below_u32(6000) + 1;
+            let clear = rng.below_u32(fire) + 1;
             assert!(monitor.add_rule(rule(fire, clear, 0)).is_ok());
             rules.push((fire, clear));
         }
@@ -122,31 +107,29 @@ fn monitor_matches_a_naive_replay_model() {
                 ));
             }
             let before: Vec<_> = (0..RULES).map(|i| monitor.state(i)).collect();
-            let Ok(verdict) = monitor.evaluate(now, &windows) else {
-                panic!("accepted");
-            };
+            let verdict = monitor.evaluate(now, &windows).expect("accepted");
             assert_eq!(monitor.last(), Some(now));
             for (index, decision) in verdict.decisions().iter().enumerate() {
                 let (fire, clear) = rules[index];
                 let history = &histories[index];
                 let expected = naive_state(history, fire, clear, policy);
-                assert_eq!(decision.state, expected, "round {round} now {now:?}");
+                assert_eq!(decision.state(), expected, "round {round} now {now:?}");
                 if before[index] != Some(expected) {
                     since[index] = Some(now);
                 }
-                assert_eq!(decision.since, since[index]);
+                assert_eq!(decision.since(), since[index]);
                 assert_eq!(monitor.state(index), Some(expected));
                 let (long, short) = history[history.len() - 1];
-                assert_eq!(decision.long_milli.map(u128::from), long);
-                assert_eq!(decision.short_milli.map(u128::from), short);
-                assert_eq!(decision.measured, long.is_some() && short.is_some());
+                assert_eq!(decision.long_milli().map(u128::from), long);
+                assert_eq!(decision.short_milli().map(u128::from), short);
+                assert_eq!(decision.measured(), long.is_some() && short.is_some());
                 let was = before[index] == Some(State::Firing);
                 let change = match (was, expected == State::Firing) {
                     (false, true) => Change::Raised,
                     (true, false) => Change::Cleared,
                     (false, false) | (true, true) => Change::None,
                 };
-                assert_eq!(decision.change, change);
+                assert_eq!(decision.change(), change);
                 raised += u32::from(change == Change::Raised);
                 cleared += u32::from(change == Change::Cleared);
             }
@@ -163,8 +146,8 @@ fn ledger_matches_a_naive_model() {
     let mut rng = Rng(0xD1B5_4A32_D192_ED03);
     let mut seen = [0_u32; 3];
     for _ in 0..400 {
-        let per = u32::try_from(rng.below(60) + 2).unwrap_or(2);
-        let good = u32::try_from(rng.below(u64::from(per))).unwrap_or(0);
+        let per = rng.below_u32(60) + 2;
+        let good = rng.below_u32(per);
         let mut period = rng.below(5);
         let mut ledger = Ledger::new(objective(good, per), period);
         let (mut ok, mut total) = (0_u64, 0_u64);
@@ -197,24 +180,23 @@ fn ledger_matches_a_naive_model() {
             let account = ledger.account();
             let allowance = naive_allowance(good, per, total);
             let bad = total - ok;
-            let standing = if total == 0 {
-                Standing::NoData
-            } else if bad > allowance {
-                Standing::Exhausted {
+            let standing = match (total, allowance.checked_sub(bad)) {
+                (0, _) => Standing::NoData,
+                (_, Some(remaining)) => Standing::Within { remaining },
+                (_, None) => Standing::Exhausted {
                     overspent: bad - allowance,
-                }
-            } else {
-                Standing::Within {
-                    remaining: allowance - bad,
-                }
+                },
             };
             assert_eq!(
-                (account.period, account.counts),
+                (account.period(), account.counts()),
                 (period, counts(ok, total))
             );
-            assert_eq!((account.allowance, account.standing), (allowance, standing));
             assert_eq!(
-                account.consumed_milli.map(u128::from),
+                (account.allowance(), account.standing()),
+                (allowance, standing)
+            );
+            assert_eq!(
+                account.consumed_milli().map(u128::from),
                 naive_milli(good, per, Some((ok, total)), 0)
             );
             seen[match standing {

@@ -45,10 +45,10 @@ class MonitorTest < Minitest::Test
     verdict = m.evaluate(3, [pair(HOT, HOT), pair(CALM, HOT)])
     page, ticket = verdict.decisions
     assert_equal Decision.new(
-      state: :firing, change: :raised, measured: true, long_milli: 20_000, short_milli: 20_000, since: 3
+      state: :firing, change: :raised, long_milli: 20_000, short_milli: 20_000, since: 3
     ), page
-    assert_predicate page, :firing?
-    refute_predicate page, :no_data?
+    assert_equal :firing, page.state
+    assert_predicate page, :measured?
     assert_predicate verdict, :frozen?
     assert_predicate verdict.decisions, :frozen?
     assert_equal [:quiet, :none, 1], [ticket.state, ticket.change, ticket.since]
@@ -80,13 +80,12 @@ class MonitorTest < Minitest::Test
       m = Monitor.new(Objective.new(9, 10), policy, 5)
       m.add_rule(Rule.new(1000, 1000, 0))
       first = m.evaluate(0, [pair(:no_data, :no_data)]).decisions.first
-      assert_equal [from_start, false, nil, nil], [first.state, first.measured, first.long_milli, first.short_milli]
-      assert_predicate first, :no_data?
-      assert_predicate m.evaluate(1, [hot]).decisions.first, :firing?
+      assert_equal [from_start, false, nil, nil], [first.state, first.measured?, first.long_milli, first.short_milli]
+      assert_equal :firing, m.evaluate(1, [hot]).decisions.first.state
       thin = m.evaluate(2, [pair(read(0, 10), read(0, 4))]).decisions.first
-      assert_equal [from_firing, false, 10_000, nil], [thin.state, thin.measured, thin.long_milli, thin.short_milli]
+      assert_equal [from_firing, false, 10_000, nil], [thin.state, thin.measured?, thin.long_milli, thin.short_milli]
       empty = m.evaluate(3, [pair(read(0, 0), read(0, 10))]).decisions.first
-      refute empty.measured
+      refute_predicate empty, :measured?
     end
   end
 
@@ -155,7 +154,7 @@ class MonitorTest < Minitest::Test
     assert_raises(TypeError) { Sample::Counts.new(nil) }
     assert_raises(TypeError) { Windows.new([1, 2], :no_data) }
     assert_raises(TypeError) { Windows.new(HOT, nil) }
-    assert_raises(TypeError) { Windows.new(HOT, :quiet) }
+    assert_raises(RangeError) { Windows.new(HOT, :quiet) }
     assert_raises(TypeError) { Windows.new(Counts.new(1, 2), HOT) }
     assert_raises(ArgumentError) { Windows.new(HOT) }
   end
@@ -178,7 +177,7 @@ class MonitorTest < Minitest::Test
     assert_raises(RangeError) { m.evaluate(-1, both) }
     assert_raises(TypeError) { Monitor.new([999, 1000], :hold, 0) }
     assert_raises(TypeError) { Monitor.new(SLO, 'hold', 0) }
-    assert_raises(ArgumentError) { Monitor.new(SLO, :panic, 0) }
+    assert_raises(RangeError) { Monitor.new(SLO, :panic, 0) }
     assert_raises(ArgumentError) { Monitor.new(SLO) }
     assert_raises(ArgumentError) { Monitor.new(SLO, :hold) }
     assert_raises(TypeError) { Monitor.allocate }
@@ -201,7 +200,7 @@ class MonitorTest < Minitest::Test
     all_bad = read(0, 2**64 - 1)
     decision = m.evaluate(2**64 - 1, [pair(all_bad, all_bad)]).decisions.first
     assert_equal [:firing, (2**32 - 1) * 1000, 2**64 - 1], [decision.state, decision.long_milli, decision.since]
-    refute m.evaluate(2**64 - 1, [pair(all_bad, read(0, 2**64 - 2))]).decisions.first.measured
+    refute m.evaluate(2**64 - 1, [pair(all_bad, read(0, 2**64 - 2))]).decisions.first.measured?
   ensure
     GC.stress = previous
   end

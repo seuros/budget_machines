@@ -1,12 +1,14 @@
 //! `BudgetMachines::Monitor`.
 use std::cell::RefCell;
 
-use budget_machines::{Change, Decision, OnNoData, Rule, Sample, State, Windows};
+use budget_machines::{Change, OnNoData, Rule, Sample, State, Verdict, Windows};
 use magnus::{Error, Integer, RArray, Ruby, Symbol, Value, prelude::*, typed_data::Obj};
 
+use crate::classes::{classes, exact, field, keep};
 use crate::{
-    CAPACITY, Nanos, Number, Small, counts, data, expect, nanos, objective, objective_value,
-    refusal,
+    CAPACITY, Nanos, Number, Small, counts, nanos, objective, objective_value, range_error,
+    refusal, type_error,
+    values::{decision_fields, symbol_name},
 };
 
 #[magnus::wrap(class = "BudgetMachines::Monitor", free_immediately, size)]
@@ -14,7 +16,7 @@ pub struct Monitor {
     core: RefCell<budget_machines::Monitor<CAPACITY>>,
 }
 
-const fn state(state: State) -> &'static str {
+pub const fn state_name(state: State) -> &'static str {
     match state {
         State::NoData => "no_data",
         State::Quiet => "quiet",
@@ -22,21 +24,25 @@ const fn state(state: State) -> &'static str {
     }
 }
 
-fn type_error(ruby: &Ruby, message: &'static str) -> Error {
-    Error::new(ruby.exception_type_error(), message)
+pub const fn change_name(change: Change) -> &'static str {
+    match change {
+        Change::None => "none",
+        Change::Raised => "raised",
+        Change::Cleared => "cleared",
+    }
 }
 
 /// A window reading: `:no_data`, or a `Sample::Counts` wrapping a `Counts`.
-fn sample(ruby: &Ruby, value: Value) -> Result<Sample, Error> {
+pub fn sample(ruby: &Ruby, value: Value) -> Result<Sample, Error> {
     const MESSAGE: &str = "a window reading is :no_data or a BudgetMachines::Sample::Counts";
-    if let Some(symbol) = Symbol::from_value(value) {
-        return match symbol.name()?.as_ref() {
+    if Symbol::from_value(value).is_some() {
+        return match symbol_name(ruby, value, MESSAGE)?.as_str() {
             "no_data" => Ok(Sample::NoData),
-            _ => Err(type_error(ruby, MESSAGE)),
+            _ => Err(range_error(ruby, MESSAGE)),
         };
     }
-    expect(ruby, value, "Sample::Counts", MESSAGE)?;
-    counts(ruby, value.funcall("counts", ())?).map(Sample::Counts)
+    let held = exact(ruby, value, classes(ruby)?.sample, MESSAGE)?;
+    counts(ruby, field(held, 0)?).map(Sample::Counts)
 }
 
 fn windows(ruby: &Ruby, value: Value) -> Result<Vec<Windows>, Error> {
@@ -47,65 +53,61 @@ fn windows(ruby: &Ruby, value: Value) -> Result<Vec<Windows>, Error> {
         let row: Value = isize::try_from(index)
             .map_err(|_| type_error(ruby, "too many windows"))
             .and_then(|index| rows.entry(index))?;
-        expect(
+        let held = exact(
             ruby,
             row,
-            "Windows",
+            classes(ruby)?.windows,
             "each rule needs a BudgetMachines::Windows",
         )?;
         parsed.push(Windows {
-            long: sample(ruby, row.funcall("long", ())?)?,
-            short: sample(ruby, row.funcall("short", ())?)?,
+            long: sample(ruby, field(held, 0)?)?,
+            short: sample(ruby, field(held, 1)?)?,
         });
     }
     Ok(parsed)
 }
 
-fn decision(ruby: &Ruby, decision: &Decision) -> Result<Value, Error> {
-    let change = match decision.change {
-        Change::None => "none",
-        Change::Raised => "raised",
-        Change::Cleared => "cleared",
-    };
-    data(
-        ruby,
-        "Decision",
-        (
-            ruby.to_symbol(state(decision.state)),
-            ruby.to_symbol(change),
-            decision.measured,
-            decision.long_milli,
-            decision.short_milli,
-            decision.since.map(|since| nanos(ruby, since)),
-        ),
-    )
-}
-
 fn policy(ruby: &Ruby, value: Value) -> Result<OnNoData, Error> {
-    let symbol =
-        Symbol::from_value(value).ok_or_else(|| type_error(ruby, "policy must be a Symbol"))?;
-    match symbol.name()?.as_ref() {
+    match symbol_name(ruby, value, "policy must be a Symbol")?.as_str() {
         "hold" => Ok(OnNoData::Hold),
         "reset" => Ok(OnNoData::Reset),
         "fire" => Ok(OnNoData::Fire),
-        _ => Err(Error::new(
-            ruby.exception_arg_error(),
-            "policy must be :hold, :reset or :fire",
-        )),
+        _ => Err(range_error(ruby, "policy must be :hold, :reset or :fire")),
     }
 }
 
-fn rule(ruby: &Ruby, value: Value) -> Result<Rule, Error> {
-    expect(ruby, value, "Rule", "expected a BudgetMachines::Rule")?;
-    let range = |message| Error::new(ruby.exception_range_error(), message);
-    let (fire_milli, clear_milli, severity): (Small, Small, Number) = (
-        value.funcall("fire_milli", ())?,
-        value.funcall("clear_milli", ())?,
-        value.funcall("severity", ())?,
-    );
-    let severity = u8::try_from(severity.0).map_err(|_| range("severity must be 0..255"))?;
+pub fn checked_rule(
+    ruby: &Ruby,
+    fire_milli: Small,
+    clear_milli: Small,
+    severity: Number,
+) -> Result<Rule, Error> {
+    let severity =
+        u8::try_from(severity.0).map_err(|_| range_error(ruby, "severity must be 0..255"))?;
     Rule::new(fire_milli.0, clear_milli.0, severity)
-        .ok_or_else(|| range("thresholds need 0 < clear_milli <= fire_milli"))
+        .ok_or_else(|| range_error(ruby, "thresholds need 0 < clear_milli <= fire_milli"))
+}
+
+fn rule(ruby: &Ruby, value: Value) -> Result<Rule, Error> {
+    let held = exact(
+        ruby,
+        value,
+        classes(ruby)?.rule,
+        "expected a BudgetMachines::Rule",
+    )?;
+    checked_rule(ruby, field(held, 0)?, field(held, 1)?, field(held, 2)?)
+}
+
+/// A `BudgetMachines::Verdict` built from a core verdict, through `new`.
+fn verdict_value(ruby: &Ruby, verdict: &Verdict<CAPACITY>) -> Result<Value, Error> {
+    let classes = classes(ruby)?;
+    let decision = ruby.get_inner(classes.decision);
+    let decisions = ruby.ary_new_capa(verdict.decisions().len());
+    for each in verdict.decisions() {
+        decisions.push(decision.funcall::<_, _, Value>("new", decision_fields(ruby, each))?)?;
+    }
+    ruby.get_inner(classes.verdict)
+        .funcall("new", (decisions, verdict.worst()))
 }
 
 /// A rule index. One that does not fit in `usize` names no rule.
@@ -136,7 +138,7 @@ impl Monitor {
         let outcome = this.core.borrow_mut().add_rule(rule);
         Ok(match outcome {
             Ok(index) => ruby.integer_from_u64(index as u64).as_value(),
-            Err(refused) => refusal(ruby, refused).as_value(),
+            Err(refused) => refusal(ruby, refused),
         })
     }
 
@@ -147,30 +149,31 @@ impl Monitor {
         readings: Value,
     ) -> Result<Value, Error> {
         this.check_frozen()?;
+        // Everything that can raise happens before the core records `now`.
         let readings = windows(ruby, readings)?;
-        let outcome = this.core.borrow_mut().evaluate(now.0, &readings);
-        let verdict = match outcome {
-            Ok(verdict) => verdict,
-            Err(refused) => return Ok(refusal(ruby, refused).as_value()),
-        };
-        let decisions = ruby.ary_new_capa(verdict.decisions().len());
-        for each in verdict.decisions() {
-            decisions.push(decision(ruby, each)?)?;
-        }
-        decisions.freeze();
-        data(ruby, "Verdict", (decisions, verdict.worst()))
+        keep(
+            ruby,
+            this,
+            &this.core,
+            |core| core.evaluate(now.0, &readings),
+            |outcome| match outcome {
+                Ok(verdict) => verdict_value(ruby, &verdict),
+                Err(refused) => Ok(refusal(ruby, refused)),
+            },
+        )
     }
 
     pub fn objective(ruby: &Ruby, this: &Self) -> Result<Value, Error> {
-        objective_value(ruby, this.core.borrow().objective())
+        let held = this.core.borrow().objective();
+        objective_value(ruby, held)
     }
 
     pub fn rule(ruby: &Ruby, this: &Self, at: Number) -> Result<Option<Value>, Error> {
         let rule = this.core.borrow().rule(index(at));
+        let class = ruby.get_inner(classes(ruby)?.rule);
         rule.map(|rule| {
-            data(
-                ruby,
-                "Rule",
+            class.funcall(
+                "new",
                 (rule.fire_milli(), rule.clear_milli(), rule.severity()),
             )
         })
@@ -179,7 +182,7 @@ impl Monitor {
 
     pub fn state(ruby: &Ruby, this: &Self, at: Number) -> Option<Symbol> {
         let current = this.core.borrow().state(index(at))?;
-        Some(ruby.to_symbol(state(current)))
+        Some(ruby.to_symbol(state_name(current)))
     }
 
     pub fn worst(&self) -> Option<usize> {

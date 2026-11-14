@@ -1,6 +1,9 @@
 //! Error-budget accounting for one compliance period at a time.
 
-use crate::{Counts, Objective, Refusal};
+use crate::{Counts, MILLI, Objective, Refusal};
+
+/// `consumed_milli` of an account that spent exactly its allowance.
+const SPENT: u64 = MILLI as u64;
 
 /// Where the period stands against its allowance.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -22,19 +25,102 @@ pub enum Standing {
 /// A period's budget, computed exactly from its counts.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Account {
+    period: u64,
+    counts: Counts,
+    base: u64,
+    allowance: u64,
+    standing: Standing,
+    consumed_milli: Option<u64>,
+}
+
+impl Account {
+    /// An account rebuilt from its fields, or `None` when no ledger could
+    /// have produced it. The objective is not part of an account, so only
+    /// what holds for every objective is checked: `base` covers the observed
+    /// total; `allowance` does not exceed `base`, since a tolerated fraction
+    /// is at most one; `standing` is the one `counts` and
+    /// `allowance` give; `consumed_milli` is absent exactly when `base` is
+    /// zero, is zero when nothing was bad, at most `1000` within the
+    /// allowance and at least `1000` beyond it.
+    #[must_use]
+    pub const fn new(
+        period: u64,
+        counts: Counts,
+        base: u64,
+        allowance: u64,
+        standing: Standing,
+        consumed_milli: Option<u64>,
+    ) -> Option<Self> {
+        let bad = counts.bad();
+        let shaped = base >= counts.total() && allowance <= base;
+        let consumed = match consumed_milli {
+            None => base == 0,
+            Some(milli) => base > 0 && (bad > 0 || milli == 0),
+        };
+        let consistent = match standing {
+            Standing::NoData => counts.total() == 0,
+            Standing::Within { remaining } => {
+                counts.total() > 0
+                    && bad <= allowance
+                    && remaining == allowance - bad
+                    && matches!(consumed_milli, None | Some(0..=SPENT))
+            }
+            Standing::Exhausted { overspent } => {
+                counts.total() > 0
+                    && bad > allowance
+                    && overspent == bad - allowance
+                    && matches!(consumed_milli, Some(SPENT..))
+            }
+        };
+        if !(shaped && consumed && consistent) {
+            return None;
+        }
+        Some(Self {
+            period,
+            counts,
+            base,
+            allowance,
+            standing,
+            consumed_milli,
+        })
+    }
+
     /// Period the counts belong to.
-    pub period: u64,
+    #[must_use]
+    pub const fn period(&self) -> u64 {
+        self.period
+    }
+
     /// Good and total events observed in the period.
-    pub counts: Counts,
+    #[must_use]
+    pub const fn counts(&self) -> Counts {
+        self.counts
+    }
+
     /// Total the allowance was computed against: observed, or the plan.
-    pub base: u64,
+    #[must_use]
+    pub const fn base(&self) -> u64 {
+        self.base
+    }
+
     /// Whole bad events tolerated among `base` events.
-    pub allowance: u64,
+    #[must_use]
+    pub const fn allowance(&self) -> u64 {
+        self.allowance
+    }
+
     /// Verdict; `NoData` whenever nothing was observed.
-    pub standing: Standing,
+    #[must_use]
+    pub const fn standing(&self) -> Standing {
+        self.standing
+    }
+
     /// Budget consumed in thousandths (`1000` is all of it), rounded down and
     /// saturating. `None` when `base` is zero.
-    pub consumed_milli: Option<u64>,
+    #[must_use]
+    pub const fn consumed_milli(&self) -> Option<u64> {
+        self.consumed_milli
+    }
 }
 
 /// Accumulates caller-supplied counts for the current compliance period.

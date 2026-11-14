@@ -6,6 +6,28 @@ use std::vec::Vec;
 use super::*;
 
 mod model;
+mod values;
+
+/// Xorshift64: a deterministic stream for the randomized tests.
+struct Rng(u64);
+
+impl Rng {
+    const fn next(&mut self) -> u64 {
+        self.0 ^= self.0 << 13;
+        self.0 ^= self.0 >> 7;
+        self.0 ^= self.0 << 17;
+        self.0
+    }
+
+    const fn below(&mut self, bound: u64) -> u64 {
+        self.next() % bound
+    }
+
+    /// A draw in `0..bound`, narrowed to `u32`.
+    fn below_u32(&mut self, bound: u32) -> u32 {
+        u32::try_from(self.below(u64::from(bound))).expect("below a u32 bound")
+    }
+}
 
 /// Test time in whole minutes since the epoch the test picked.
 const fn t(minutes: u64) -> Duration {
@@ -13,15 +35,15 @@ const fn t(minutes: u64) -> Duration {
 }
 
 fn objective(good: u32, per: u32) -> Objective {
-    Objective::new(good, per).unwrap_or_else(|| panic!("valid objective"))
+    Objective::new(good, per).expect("valid objective")
 }
 
 fn counts(good: u64, total: u64) -> Counts {
-    Counts::new(good, total).unwrap_or_else(|| panic!("valid counts"))
+    Counts::new(good, total).expect("valid counts")
 }
 
 fn rule(fire: u32, clear: u32, severity: u8) -> Rule {
-    Rule::new(fire, clear, severity).unwrap_or_else(|| panic!("valid rule"))
+    Rule::new(fire, clear, severity).expect("valid rule")
 }
 
 fn pair(long: (u64, u64), short: (u64, u64)) -> Windows {
@@ -87,23 +109,26 @@ fn u64_and_u32_limits_neither_overflow_nor_wrap() {
 fn ledger_accounts_and_distinguishes_no_data() {
     let mut ledger = Ledger::new(objective(99, 100), 7);
     let empty = ledger.account();
-    assert_eq!(empty.standing, Standing::NoData);
-    assert_eq!(empty.consumed_milli, None);
+    assert_eq!(empty.standing(), Standing::NoData);
+    assert_eq!(empty.consumed_milli(), None);
     assert_eq!(ledger.record(7, counts(995, 1000)), Ok(()));
     let account = ledger.account();
-    assert_eq!(account.allowance, 10);
-    assert_eq!(account.standing, Standing::Within { remaining: 5 });
-    assert_eq!(account.consumed_milli, Some(500));
+    assert_eq!(account.allowance(), 10);
+    assert_eq!(account.standing(), Standing::Within { remaining: 5 });
+    assert_eq!(account.consumed_milli(), Some(500));
     assert_eq!(ledger.record(7, counts(0, 5)), Ok(()));
-    assert_eq!(ledger.account().standing, Standing::Within { remaining: 0 });
+    assert_eq!(
+        ledger.account().standing(),
+        Standing::Within { remaining: 0 }
+    );
     assert_eq!(ledger.record(7, counts(0, 1)), Ok(()));
     assert_eq!(
-        ledger.account().standing,
+        ledger.account().standing(),
         Standing::Exhausted { overspent: 1 }
     );
     assert_eq!(ledger.replace(7, counts(1000, 1000)), Ok(()));
     assert_eq!(
-        ledger.account().standing,
+        ledger.account().standing(),
         Standing::Within { remaining: 10 }
     );
 }
@@ -113,19 +138,22 @@ fn ledger_plans_against_a_forecast() {
     let mut ledger = Ledger::new(objective(999, 1000), 0);
     assert_eq!(ledger.record(0, counts(9, 10)), Ok(()));
     assert_eq!(
-        ledger.account().standing,
+        ledger.account().standing(),
         Standing::Exhausted { overspent: 1 }
     );
     let planned = ledger.account_against(100_000);
     assert_eq!(
-        planned.map(|account| (account.base, account.allowance, account.standing)),
+        planned.map(|account| (account.base(), account.allowance(), account.standing())),
         Ok((100_000, 100, Standing::Within { remaining: 99 }))
     );
-    assert_eq!(planned.map(|account| account.consumed_milli), Ok(Some(10)));
+    assert_eq!(
+        planned.map(|account| account.consumed_milli()),
+        Ok(Some(10))
+    );
     assert_eq!(ledger.account_against(9), Err(Refusal::BelowObserved));
     let unseen = Ledger::new(objective(999, 1000), 0).account_against(1000);
     assert_eq!(
-        unseen.map(|account| (account.allowance, account.standing)),
+        unseen.map(|account| (account.allowance(), account.standing())),
         Ok((1, Standing::NoData))
     );
 }
@@ -146,12 +174,12 @@ fn ledger_refusals_leave_it_untouched() {
     assert_eq!(ledger.record(5, counts(1, 1)), Ok(()));
     let closed = ledger.roll(u64::MAX);
     assert_eq!(
-        closed.map(|account| (account.period, account.counts)),
+        closed.map(|account| (account.period(), account.counts())),
         Ok((5, counts(u64::MAX, u64::MAX)))
     );
     assert_eq!(ledger.period(), u64::MAX);
     assert_eq!(ledger.counts(), Counts::default());
-    assert_eq!(ledger.account().standing, Standing::NoData);
+    assert_eq!(ledger.account().standing(), Standing::NoData);
     assert_eq!(ledger.record(5, counts(1, 1)), Err(Refusal::StalePeriod));
     assert_eq!(ledger.roll(u64::MAX), Err(Refusal::StalePeriod));
 }
@@ -174,34 +202,34 @@ fn both_windows_must_burn_and_the_short_one_clears() {
             .map(|v| v.worst()),
         Ok(None)
     );
-    let Ok(verdict) = monitor.evaluate(t(3), &[pair(hot, hot), pair(calm, hot)]) else {
-        panic!("accepted");
-    };
+    let verdict = monitor
+        .evaluate(t(3), &[pair(hot, hot), pair(calm, hot)])
+        .expect("accepted");
     assert_eq!(verdict.worst(), Some(0));
     let [page, ticket] = verdict.decisions() else {
         panic!("two rules");
     };
     assert_eq!(
-        (page.state, page.change, page.measured, page.since),
+        (page.state(), page.change(), page.measured(), page.since()),
         (State::Firing, Change::Raised, true, Some(t(3)))
     );
     assert_eq!(
-        (page.long_milli, page.short_milli),
+        (page.long_milli(), page.short_milli()),
         (Some(20_000), Some(20_000))
     );
     assert_eq!(
-        (ticket.state, ticket.change, ticket.since),
+        (ticket.state(), ticket.change(), ticket.since()),
         (State::Quiet, Change::None, Some(t(1)))
     );
-    let Ok(verdict) = monitor.evaluate(t(4), &[pair(hot, calm), pair(hot, hot)]) else {
-        panic!("accepted");
-    };
+    let verdict = monitor
+        .evaluate(t(4), &[pair(hot, calm), pair(hot, hot)])
+        .expect("accepted");
     assert_eq!(verdict.worst(), Some(1));
     assert_eq!(
         verdict
             .decisions()
             .iter()
-            .map(|d| d.change)
+            .map(Decision::change)
             .collect::<Vec<_>>(),
         [Change::Cleared, Change::Raised]
     );
@@ -215,7 +243,7 @@ fn hysteresis_holds_until_below_the_clear_threshold() {
         let window = (100 - bad, 100);
         monitor
             .evaluate(t(now), &[pair(window, window)])
-            .map(|verdict| verdict.decisions().first().map(|d| (d.state, d.change)))
+            .map(|verdict| verdict.decisions().first().map(|d| (d.state(), d.change())))
     };
     assert_eq!(
         step(&mut monitor, 0, 1),
@@ -250,29 +278,28 @@ fn no_data_follows_the_configured_policy() {
     ] {
         let mut monitor = Monitor::<1>::new(objective(9, 10), policy, 5);
         assert_eq!(monitor.add_rule(rule(1000, 1000, 0)), Ok(0));
-        let Ok(verdict) = monitor.evaluate(t(0), &[SILENT]) else {
-            panic!("accepted");
-        };
+        let verdict = monitor.evaluate(t(0), &[SILENT]).expect("accepted");
         let [first] = verdict.decisions() else {
             panic!("one rule");
         };
-        assert_eq!((first.state, first.measured), (from_start, false));
-        assert_eq!((first.long_milli, first.short_milli), (None, None));
+        assert_eq!((first.state(), first.measured()), (from_start, false));
+        assert_eq!((first.long_milli(), first.short_milli()), (None, None));
         assert_eq!(
             monitor.evaluate(t(1), &[hot]).map(|v| v.worst()),
             Ok(Some(0))
         );
         // Below the minimum total is no data even though counts were supplied.
-        let Ok(verdict) = monitor.evaluate(t(2), &[thin]) else {
-            panic!("accepted");
-        };
+        let verdict = monitor.evaluate(t(2), &[thin]).expect("accepted");
         let [after] = verdict.decisions() else {
             panic!("one rule");
         };
-        assert_eq!((after.state, after.measured), (from_firing, false));
-        assert_eq!((after.long_milli, after.short_milli), (Some(10_000), None));
+        assert_eq!((after.state(), after.measured()), (from_firing, false));
+        assert_eq!(
+            (after.long_milli(), after.short_milli()),
+            (Some(10_000), None)
+        );
         let cleared = from_firing != State::Firing;
-        assert_eq!(after.change == Change::Cleared, cleared);
+        assert_eq!(after.change() == Change::Cleared, cleared);
     }
 }
 

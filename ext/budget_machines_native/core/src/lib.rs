@@ -129,10 +129,14 @@ impl Objective {
     /// Whole bad events the objective tolerates among `total` events:
     /// `floor(total * tolerated / per)`.
     #[must_use]
-    pub fn allowance(self, total: u64) -> u64 {
-        let exact = u128::from(total) * u128::from(self.tolerated()) / u128::from(self.per);
-        // tolerated <= per, so the quotient never exceeds `total`.
-        u64::try_from(exact).unwrap_or(u64::MAX)
+    pub const fn allowance(self, total: u64) -> u64 {
+        // total = whole * per + rest, so the allowance is
+        // whole * tolerated + floor(rest * tolerated / per). tolerated < per
+        // keeps the first product at most `total`, and rest < per < 2^32
+        // keeps the second within 64 bits: nothing to saturate or narrow.
+        let (per, tolerated) = (self.per as u64, self.tolerated() as u64);
+        let (whole, rest) = (total / per, total % per);
+        whole * tolerated + rest * tolerated / per
     }
 
     /// Burn rate of `bad` events against a base of `total`, in thousandths,

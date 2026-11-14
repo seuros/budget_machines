@@ -1,5 +1,8 @@
 //! Private native entry point.
-use crate::{CAPACITY, allowance, burn_milli_of, burns_at_least, ledger::Ledger, monitor::Monitor};
+use crate::{
+    CAPACITY, allowance, burn_milli, burn_milli_of, burns_at_least, classes, ledger::Ledger,
+    monitor::Monitor, values,
+};
 use magnus::{Error, Ruby, function, method, prelude::*};
 
 #[magnus::init]
@@ -7,9 +10,12 @@ fn init(ruby: &Ruby) -> Result<(), Error> {
     let module = ruby.define_module("BudgetMachines")?;
     module.const_set("CAPACITY", CAPACITY)?;
     module.const_set("MILLI", budget_machines::MILLI)?;
-    module.define_singleton_method("__allowance", function!(allowance, 3))?;
-    module.define_singleton_method("__burn_milli_of", function!(burn_milli_of, 4))?;
-    module.define_singleton_method("__burns_at_least", function!(burns_at_least, 5))?;
+    module.define_singleton_method("__allowance", function!(allowance, 2))?;
+    module.define_singleton_method("__burn_milli_of", function!(burn_milli_of, 3))?;
+    module.define_singleton_method("__burn_milli", function!(burn_milli, 2))?;
+    module.define_singleton_method("__burns_at_least", function!(burns_at_least, 3))?;
+    values::define(ruby)?;
+    classes::resolve(ruby, module)?;
 
     let class = module.define_class("Ledger", ruby.class_object())?;
     class.undef_default_alloc_func();

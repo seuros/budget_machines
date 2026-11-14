@@ -159,7 +159,7 @@ end
 BM::Ledger.new(BM::Objective.new(99, 100), 7).account.standing   # => :no_data
 ```
 
-An `Account` has exactly the fields of the core's: `period`, `counts`, `base`, `allowance`, `standing`, `consumed_milli`. `standing` is one of three values, one per variant of the core's `Standing`: `Standing::Within` carries `remaining`, `Standing::Exhausted` carries `overspent`, and the unit variant `NoData` is the symbol `:no_data`, because an empty period has nothing to report. `within?`, `exhausted?` and `no_data?` ask without matching. An empty period has a `nil` `consumed_milli`.
+An `Account` has exactly the fields of the core's: `period`, `counts`, `base`, `allowance`, `standing`, `consumed_milli`. `standing` is one of three values, one per variant of the core's `Standing`: `Standing::Within` carries `remaining`, `Standing::Exhausted` carries `overspent`, and the unit variant `NoData` is the symbol `:no_data`, because an empty period has nothing to report. Ask by matching `standing` (`case account.standing in BM::Standing::Within`), as a Rust caller matches the enum: there are no Ruby-only predicates. An empty period has a `nil` `consumed_milli`.
 
 The allowance grows with traffic, so one failure in the first ten requests of a period is exhausted. If you'd rather budget against the traffic you expect:
 
@@ -239,7 +239,7 @@ monitor = BM::Monitor.new(BM::Objective.new(999, 1000), :hold, 100)
 monitor.add_rule(BM::Rule.new(14_400, 14_400, 2))
 
 decision = monitor.evaluate(t0, [BM::Windows.new(read.(9_800, 10_000), :no_data)]).decisions.first
-decision.measured     # => false
+decision.measured?    # => false
 decision.state        # => :no_data, it has never been measured
 decision.short_milli  # => nil
 ```
@@ -250,7 +250,7 @@ The policy decides what a rule does when it can't be measured:
 - `:reset` puts it back to `:no_data`. A firing alert clears, and says so with `:cleared`.
 - `:fire` treats silence as an outage.
 
-Whichever you pick, `measured` is `false` on that decision, so a state the policy chose is never mistaken for one the numbers chose.
+Whichever you pick, `measured?` is `false` on that decision, so a state the policy chose is never mistaken for one the numbers chose. It is not a stored field: a decision was measured exactly when both burn rates are known, as in the core's `Decision::measured`.
 
 ### Time only moves forward
 
@@ -265,7 +265,7 @@ A refused evaluation changes no alert state. Evaluating the same instant twice i
 ## The Rules of the Tender
 
 - **Time is Integer nanoseconds.** The `now` of `evaluate`, `Decision#since` and `Monitor#last` are instants of a monotonic clock in nanoseconds. A Float or anything else that isn't an Integer raises `TypeError`; negative or past `2**64-1` raises `RangeError`. A ledger period is not time: it is an opaque number you advance.
-- **Everything is an Integer.** Counts, periods and instants are in `0..2**64-1`. Objectives and thresholds are in `0..2**32-1`. Severity is `0..255`. Floats, nil and strings raise `TypeError`, and so does an Array where a `Counts`, `Objective`, `Rule`, `Sample::Counts` or `Windows` belongs, or `nil` where a window reading belongs. Out of range, `good > total`, a 100% objective, or a clear threshold above the fire threshold raises `RangeError` when the value is built, so an invalid one never exists.
+- **Everything is an Integer.** Counts, periods and instants are in `0..2**64-1`. Objectives and thresholds are in `0..2**32-1`. Severity is `0..255`. Floats, nil and strings raise `TypeError`, and so does an Array where a `Counts`, `Objective`, `Rule`, `Sample::Counts` or `Windows` belongs, or `nil` where a window reading belongs. Out of range, `good > total`, a 100% objective, a clear threshold above the fire threshold, or a Symbol outside the listed ones (a policy of `:panic`, a window reading of `:quiet`) raises `RangeError` when the value is built, so an invalid one never exists.
 - **Ruby mirrors Rust.** Every `Data` value has the name and the fields, in order, of the core's struct. An enum's unit variant is a symbol and a variant that carries something is a `Data` named after it: the no-data policy is `:hold`, `:reset` or `:fire`; a rule's state is `:no_data`, `:quiet` or `:firing`; a change is `:none`, `:raised` or `:cleared`; a window reading is `:no_data` or a `Sample::Counts`; a standing is `:no_data`, a `Standing::Within` or a `Standing::Exhausted`.
 - **Refusals don't raise.** `:stale_period`, `:overflow`, `:below_observed`, `:full`, `:shape` and `:time_regression` are answers, and the object is exactly as it was before you asked.
 - **Every answer, by method.**
@@ -280,6 +280,10 @@ A refused evaluation changes no alert state. Evaluating the same instant twice i
   | `Monitor#evaluate(now, windows)` | a `Verdict` | `:time_regression`, `:shape` |
 
   Those six symbols are every variant of the core's `Refusal`, and each is reachable. There is no catch-all symbol.
+- **Which answers record the clock.** Only `Monitor#evaluate` takes a clock. Every honoured `evaluate` records `now` as `Monitor#last`, because every `Verdict` is the rules' state as of `now`: a later evaluation at an earlier instant would judge older readings after newer ones. A refusal records nothing. The ledger has no clock: its period is an opaque number.
+- **Values are valid or do not exist.** Every `Data` value validates through the core when it is built, by you or by the gem: `Counts`, `Objective` and `Rule` through their constructors, `Account`, `Decision` and `Verdict` through constructors that refuse what no ledger or evaluation could produce (an allowance above its base, a standing the counts do not give, a raised edge that isn't firing, a `worst` that names a quiet rule). A wrong type raises `TypeError`, a value the core rejects (including an unknown Symbol) raises `RangeError`. What you pass and what you get back compare `==`. Every value class is sealed: `allocate` is undefined and subclassing raises `TypeError`, so nothing skips the check.
+- **The binding never loses work.** Every conversion happens before the core is called, and the classes are resolved once, at load. Building an answer runs Ruby code (`new`), so `roll` and `evaluate` decide on a copy, build the answer, and keep the copy only if the object is still unfrozen and unchanged: if building raises, nothing is applied; if it freezes the object, `FrozenError`; if it re-enters and changes the object, `RuntimeError`, and the outer call is not applied.
+- **The binding trusts no value it reads.** Sealing stops accidents, not reflection: a named subclass's constant is bound before `inherited` raises, and `Marshal.load` skips `initialize`. So every value passed in must be an instance of exactly the gem's class (a subclass raises `TypeError`), and its fields are rebuilt through the core's constructor (a forged field raises `RangeError`). A forged value never reaches the core.
 - **No floats inside.** Thresholds are compared by cross-multiplying in 128 bits. Reported burn rates are rounded down to the thousandth. Decisions never use the rounded number.
 - **No data is not zero.** An empty window has a `nil` burn rate. An empty period has no standing.
 - **Frozen means frozen.** `freeze` a ledger or a monitor and anything that would change it raises `FrozenError`. Reading still works.

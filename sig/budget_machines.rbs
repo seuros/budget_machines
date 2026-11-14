@@ -12,6 +12,9 @@ module BudgetMachines
   # A window reading: :no_data when the caller has none, or exact counts.
   type sample = :no_data | Sample::Counts
 
+  # Every Data value validates through the core when built, by hand or by the
+  # gem: a wrong type raises TypeError, a value the core rejects RangeError.
+
   # `good <= total`, both in 0..2**64-1; anything else raises TypeError or RangeError.
   class Counts < Data
     attr_reader good: Integer
@@ -19,6 +22,7 @@ module BudgetMachines
     def self.new: (Integer good, Integer total) -> Counts
                 | (good: Integer, total: Integer) -> Counts
     def bad: () -> Integer
+    # nil when a sum would pass 2**64-1; TypeError unless `other` is a Counts.
     def checked_add: (Counts other) -> Counts?
   end
 
@@ -44,6 +48,7 @@ module BudgetMachines
   end
 
   module Standing
+    # 0..2**64-1, like Exhausted's `overspent`.
     class Within < Data
       attr_reader remaining: Integer
       def self.new: (Integer remaining) -> Within
@@ -59,6 +64,9 @@ module BudgetMachines
 
   type standing = :no_data | Standing::Within | Standing::Exhausted
 
+  # `Account::new`: RangeError for fields no ledger could produce (base below
+  # the observed total, allowance above the base, a standing the counts and
+  # allowance do not give, a consumed_milli inconsistent with them).
   class Account < Data
     attr_reader period: Integer
     attr_reader counts: Counts
@@ -66,11 +74,13 @@ module BudgetMachines
     attr_reader allowance: Integer
     attr_reader standing: standing
     attr_reader consumed_milli: Integer?
-    def no_data?: () -> bool
-    def within?: () -> bool
-    def exhausted?: () -> bool
+    def self.new: (Integer period, Counts counts, Integer base, Integer allowance, standing standing,
+                   Integer? consumed_milli) -> Account
+                | (period: Integer, counts: Counts, base: Integer, allowance: Integer, standing: standing,
+                   consumed_milli: Integer?) -> Account
   end
 
+  # A Symbol other than :no_data raises RangeError; any other type TypeError.
   class Windows < Data
     attr_reader long: sample
     attr_reader short: sample
@@ -87,21 +97,32 @@ module BudgetMachines
                 | (fire_milli: Integer, clear_milli: Integer, severity: Integer) -> Rule
   end
 
+  # `Decision::new`: RangeError for an edge into the wrong state or without its
+  # instant, both rates (a measurement) with state :no_data, or an unknown
+  # state/change Symbol.
   class Decision < Data
     attr_reader state: state
     attr_reader change: change
-    attr_reader measured: bool
     attr_reader long_milli: Integer?
     attr_reader short_milli: Integer?
     # Instant the rule entered `state`, Integer nanoseconds; nil if it never changed.
     attr_reader since: Integer?
-    def firing?: () -> bool
-    def no_data?: () -> bool
+    def self.new: (state state, change change, Integer? long_milli, Integer? short_milli,
+                   Integer? since) -> Decision
+                | (state: state, change: change, long_milli: Integer?, short_milli: Integer?,
+                   since: Integer?) -> Decision
+    # Both burn rates known; false when the no-data policy decided `state`.
+    def measured?: () -> bool
   end
 
+  # `Verdict::new`: RangeError for more than CAPACITY decisions, a `worst`
+  # that is not a firing decision's index, or nil while one fires.
   class Verdict < Data
+    # Frozen.
     attr_reader decisions: Array[Decision]
     attr_reader worst: Integer?
+    def self.new: (Array[Decision] decisions, Integer? worst) -> Verdict
+                | (decisions: Array[Decision], worst: Integer?) -> Verdict
   end
 
   class Ledger
@@ -133,8 +154,9 @@ module BudgetMachines
     # Instant of the latest accepted evaluation, Integer nanoseconds.
     def last: () -> Integer?
     def worst: () -> Integer?
-    # `now` is Integer nanoseconds of monotonic time. Honoured: a Verdict.
-    # Refused: :time_regression, :shape.
+    # `now` is Integer nanoseconds of monotonic time. Honoured: a Verdict,
+    # and `now` is recorded (every verdict is the rules' state as of `now`).
+    # Refused: :time_regression, :shape, recording nothing.
     def evaluate: (Integer now, Array[Windows] windows) -> (Verdict | :time_regression | :shape)
   end
 end
