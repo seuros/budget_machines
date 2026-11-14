@@ -6,12 +6,12 @@ use std::time::Duration;
 use budget_machines::{Account, Decision, Standing, Verdict};
 use magnus::{Error, Integer, RArray, Ruby, Symbol, Value, prelude::*};
 use matryona_machines::ruby::{
-    Symbols, exact_array, exact_fields, integer, nanoseconds, optional, which,
+    Choice, Symbols, exact_array, exact_fields, integer, nanoseconds, optional, symbol_or_fields,
 };
 
 use crate::classes::classes;
 use crate::monitor::{self, Changes, States};
-use crate::{CAPACITY, counts, counts_value, pair, range_error, ratio, type_error};
+use crate::{CAPACITY, counts, counts_value, pair, range_error, ratio};
 
 /// What `Account.new` stores, in field order.
 type AccountFields = (u64, Value, u64, u64, Value, Option<u64>);
@@ -22,29 +22,31 @@ type DecisionFields = (Symbol, Symbol, Option<u64>, Option<u64>, Option<Integer>
 /// A `Decision`'s optional fields as the core takes them, in field order.
 type Marks = (Option<u64>, Option<u64>, Option<Duration>);
 
+matryona_machines::symbols! {
+    /// Where a period stands, as Symbols: `:no_data` is read back, the
+    /// data variants travel as their `Data` classes.
+    pub Standings for Standing as "a standing" => names_only {
+        NoData => "no_data",
+        Within { .. } => "within",
+        Exhausted { .. } => "exhausted",
+    }
+}
+
 fn standing(ruby: &Ruby, value: Value) -> Result<Standing, Error> {
     const MESSAGE: &str = "a standing is :no_data, a Standing::Within or a Standing::Exhausted";
-    if let Some(name) = Symbol::from_value(value) {
-        return match &*name.name()? {
-            "no_data" => Ok(Standing::NoData),
-            _ => Err(range_error(ruby, MESSAGE)),
-        };
-    }
     let classes = classes(ruby)?;
     let held = [classes.within.get(ruby), classes.exhausted.get(ruby)];
-    let Some(index) = which(value, &held) else {
-        return Err(type_error(ruby, MESSAGE));
-    };
-    let [field] = exact_fields::<1>(ruby, value, held[index], MESSAGE)?;
-    Ok(if index == 0 {
-        Standing::Within {
-            remaining: integer(field, "remaining")?,
-        }
-    } else {
-        Standing::Exhausted {
-            overspent: integer(field, "overspent")?,
-        }
-    })
+    Ok(
+        match symbol_or_fields(ruby, value, Standings, &held, MESSAGE)? {
+            Choice::Symbol(standing) => standing,
+            Choice::Struct(0, [field]) => Standing::Within {
+                remaining: integer(field, "remaining")?,
+            },
+            Choice::Struct(_, [field]) => Standing::Exhausted {
+                overspent: integer(field, "overspent")?,
+            },
+        },
+    )
 }
 
 /// The optional fields of a `Decision`, converted in field order.

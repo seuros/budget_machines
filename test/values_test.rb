@@ -42,7 +42,8 @@ class ValuesTest < Minitest::Test
       [1, five, 5, 1, :no_data, 1000],
       [1, five, 5, 1, within, nil], # consumption without a base, or beyond the allowance
       [1, five, 5, 1, within, 1001],
-      [1, five, 5, 1, :exhausted, 1000]
+      [1, five, 5, 1, :exhausted, 1000], # a data variant's name is never read back
+      [1, five, 5, 1, :within, 1000]
     ].each { |fields| assert_raises(RangeError) { Account.new(*fields) } }
     assert_raises(TypeError) { Account.new(1, [4, 5], 5, 1, within, 1000) }
     assert_raises(TypeError) { Account.new(1, five, 5, 1, 'within', 1000) }

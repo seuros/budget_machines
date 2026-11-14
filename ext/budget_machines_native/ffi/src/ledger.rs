@@ -3,9 +3,10 @@ use std::cell::RefCell;
 
 use budget_machines::{Account, Standing};
 use magnus::{Error, Ruby, Value, prelude::*, typed_data::Obj};
-use matryona_machines::ruby::{integer, keep, symbol};
+use matryona_machines::ruby::{SymbolNames, integer, keep};
 
 use crate::classes::classes;
+use crate::values::Standings;
 use crate::{counts, counts_value, done, objective, objective_value, refusal};
 
 #[magnus::wrap(class = "BudgetMachines::Ledger", free_immediately, size)]
@@ -17,7 +18,7 @@ pub struct Ledger {
 fn account(ruby: &Ruby, account: Account) -> Result<Value, Error> {
     let classes = classes(ruby)?;
     let standing = match account.standing() {
-        Standing::NoData => symbol(ruby, "no_data").as_value(),
+        Standing::NoData => Standings::symbol(ruby, &Standing::NoData).as_value(),
         Standing::Within { remaining } => classes.within.get(ruby).funcall("new", (remaining,))?,
         Standing::Exhausted { overspent } => {
             classes.exhausted.get(ruby).funcall("new", (overspent,))?

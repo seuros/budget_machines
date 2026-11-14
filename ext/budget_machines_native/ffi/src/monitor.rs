@@ -4,7 +4,8 @@ use std::cell::RefCell;
 use budget_machines::{Change, OnNoData, Rule, Sample, State, Verdict, Windows};
 use magnus::{Error, Integer, Ruby, Symbol, Value, prelude::*, typed_data::Obj};
 use matryona_machines::ruby::{
-    Symbols, duration, exact_array, exact_fields, integer, keep, nanoseconds,
+    Choice, Symbols, duration, exact_array, exact_fields, integer, keep, nanoseconds,
+    symbol_or_fields,
 };
 
 use crate::classes::classes;
@@ -45,17 +46,23 @@ matryona_machines::symbols! {
     }
 }
 
+matryona_machines::symbols! {
+    /// A window reading as Symbols: `:no_data` is read back, counts travel
+    /// as a `Sample::Counts`.
+    Samples for Sample as "a window reading" => names_only {
+        NoData => "no_data",
+        Counts(..) => "counts",
+    }
+}
+
 /// A window reading: `:no_data`, or a `Sample::Counts` wrapping a `Counts`.
 pub fn sample(ruby: &Ruby, value: Value) -> Result<Sample, Error> {
     const MESSAGE: &str = "a window reading is :no_data or a BudgetMachines::Sample::Counts";
-    if let Some(name) = Symbol::from_value(value) {
-        return match &*name.name()? {
-            "no_data" => Ok(Sample::NoData),
-            _ => Err(range_error(ruby, MESSAGE)),
-        };
+    let held = [classes(ruby)?.sample.get(ruby)];
+    match symbol_or_fields(ruby, value, Samples, &held, MESSAGE)? {
+        Choice::Symbol(sample) => Ok(sample),
+        Choice::Struct(_, [window]) => counts(ruby, window).map(Sample::Counts),
     }
-    let [window] = exact_fields::<1>(ruby, value, classes(ruby)?.sample.get(ruby), MESSAGE)?;
-    counts(ruby, window).map(Sample::Counts)
 }
 
 fn windows(ruby: &Ruby, value: Value) -> Result<Vec<Windows>, Error> {

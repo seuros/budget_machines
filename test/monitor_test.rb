@@ -154,7 +154,10 @@ class MonitorTest < Minitest::Test
     assert_raises(TypeError) { Sample::Counts.new(nil) }
     assert_raises(TypeError) { Windows.new([1, 2], :no_data) }
     assert_raises(TypeError) { Windows.new(HOT, nil) }
-    assert_raises(RangeError) { Windows.new(HOT, :quiet) }
+    message = 'a window reading is :no_data or a BudgetMachines::Sample::Counts'
+    %i[quiet counts].each do |name| # :counts names the data variant, never read back
+      assert_equal message, assert_raises(RangeError) { Windows.new(HOT, name) }.message
+    end
     assert_raises(TypeError) { Windows.new(Counts.new(1, 2), HOT) }
     assert_raises(ArgumentError) { Windows.new(HOT) }
   end
