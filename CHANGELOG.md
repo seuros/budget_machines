@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.1](https://github.com/seuros/budget_machines/compare/budget_machines/v0.4.0...budget_machines/v0.4.1) (2026-11-14)
+
+
+### Bug Fixes
+
+* **deps:** require matryona-machines &gt;= 0.3 and read standing with which ([44f508e](https://github.com/seuros/budget_machines/commit/44f508ed48730c5da31043002048b509a7cbfe73))
+
 ## [0.4.0](https://github.com/seuros/budget_machines/compare/budget_machines/v0.3.0...budget_machines/v0.4.0) (2026-11-14)
 
 
