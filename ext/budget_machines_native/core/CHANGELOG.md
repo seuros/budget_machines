@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.5.0](https://github.com/seuros/budget_machines/compare/budget-machines-v0.4.0...budget-machines-v0.5.0) (2026-11-14)
+
+
+### ⚠ BREAKING CHANGES
+
+* seal and validate every value, private Account/Decision fields, derive Decision#measured?, clone-then-keep roll/evaluate
+
+### Features
+
+* seal and validate every value, private Account/Decision fields, derive Decision#measured?, clone-then-keep roll/evaluate ([8ccb894](https://github.com/seuros/budget_machines/commit/8ccb894896018e4b531361f5e2a1f321cf1a13cd))
+
 ## [0.4.0](https://github.com/seuros/budget_machines/compare/budget-machines-v0.3.0...budget-machines-v0.4.0) (2026-11-13)
 
 
