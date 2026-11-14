@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.4.0](https://github.com/seuros/budget_machines/compare/budget_machines/v0.3.0...budget_machines/v0.4.0) (2026-11-14)
+
+
+### ⚠ BREAKING CHANGES
+
+* build the binding on matryona-machines 0.2; read every value from the struct; compiler-checked state, change, policy and refusal symbols
+
+### Features
+
+* build the binding on matryona-machines 0.2; read every value from the struct; compiler-checked state, change, policy and refusal symbols ([9fbe6ac](https://github.com/seuros/budget_machines/commit/9fbe6ac909a740ad330633d27ad9128d41745449))
+
 ## [0.3.0](https://github.com/seuros/budget_machines/compare/budget_machines/v0.2.0...budget_machines/v0.3.0) (2026-11-14)
 
 
