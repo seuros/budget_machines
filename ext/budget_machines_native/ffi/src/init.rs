@@ -4,6 +4,7 @@ use crate::{
     monitor::Monitor, values,
 };
 use magnus::{Error, Ruby, function, method, prelude::*};
+use matryona_machines::ruby::Class;
 
 #[magnus::init]
 fn init(ruby: &Ruby) -> Result<(), Error> {
@@ -28,6 +29,8 @@ fn init(ruby: &Ruby) -> Result<(), Error> {
     class.define_method("roll", method!(Ledger::roll, 1))?;
     class.define_method("account", method!(Ledger::account, 0))?;
     class.define_method("account_against", method!(Ledger::account_against, 1))?;
+    // `new` answers a Ledger: fix its class now, so building one runs no Ruby.
+    Class::pin_wrapped::<Ledger>(ruby, class)?;
 
     let class = module.define_class("Monitor", ruby.class_object())?;
     class.undef_default_alloc_func();
@@ -42,5 +45,6 @@ fn init(ruby: &Ruby) -> Result<(), Error> {
     class.define_method("last", method!(Monitor::last, 0))?;
     class.define_method("size", method!(Monitor::size, 0))?;
     class.define_method("capacity", function!(Monitor::capacity, 0))?;
-    Ok(())
+    // Likewise for Monitor.
+    Class::pin_wrapped::<Monitor>(ruby, class).map(drop)
 }
