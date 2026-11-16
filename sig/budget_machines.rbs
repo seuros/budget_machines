@@ -159,4 +159,25 @@ module BudgetMachines
     # Refused: :time_regression, :shape, recording nothing.
     def evaluate: (Integer now, Array[Windows] windows) -> (Verdict | :time_regression | :shape)
   end
+
+  # Private native hooks: each Data value's `initialize` validates its fields
+  # through one and stores what it answers; the Objective and Counts query
+  # methods delegate to the rest.
+  private def self.__counts: (Integer good, Integer total) -> [Integer, Integer]
+  private def self.__checked_add: (Counts left, Counts right) -> Counts?
+  private def self.__objective: (Integer good, Integer per) -> [Integer, Integer]
+  private def self.__allowance: (Objective objective, Integer total) -> Integer
+  private def self.__burn_milli_of: (Objective objective, Integer bad, Integer total) -> Integer?
+  private def self.__burn_milli: (Objective objective, Counts counts) -> Integer?
+  private def self.__burns_at_least: (Objective objective, Counts counts, Integer threshold_milli) -> bool
+  private def self.__remaining: (Integer remaining) -> Integer
+  private def self.__overspent: (Integer overspent) -> Integer
+  private def self.__account: (Integer period, Counts counts, Integer base, Integer allowance, standing standing,
+                               Integer? consumed_milli) -> [Integer, Counts, Integer, Integer, standing, Integer?]
+  private def self.__sample: (Counts counts) -> Counts
+  private def self.__windows: (sample long, sample short) -> [sample, sample]
+  private def self.__rule: (Integer fire_milli, Integer clear_milli, Integer severity) -> [Integer, Integer, Integer]
+  private def self.__decision: (state state, change change, Integer? long_milli, Integer? short_milli,
+                                Integer? since) -> [state, change, Integer?, Integer?, Integer?]
+  private def self.__verdict: (Array[Decision] decisions, Integer? worst) -> [Array[Decision], Integer?]
 end

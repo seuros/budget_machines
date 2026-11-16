@@ -1,4 +1,5 @@
 #![no_std]
+#![cfg_attr(not(test), deny(clippy::indexing_slicing))]
 #![doc = include_str!("../README.md")]
 
 mod ledger;
@@ -74,6 +75,7 @@ impl Counts {
     /// Events that missed the objective.
     #[must_use]
     pub const fn bad(self) -> u64 {
+        // `new` refuses good > total and `checked_add` keeps both sums exact.
         self.total - self.good
     }
 

@@ -6,8 +6,8 @@ Gem::Specification.new do |spec|
   spec.version = BudgetMachines::VERSION
   spec.authors = ['Abdelkader Boudih']
   spec.email = ['oss@seuros.com']
-  spec.summary = 'Initial SLO error-budget and burn-rate alert policies with a native Rust core'
-  spec.description = 'Unstable exact error-budget accounting and multi-window burn-rate decisions ' \
+  spec.summary = 'SLO error-budget and burn-rate alert policies with a native Rust core'
+  spec.description = 'Exact integer error-budget accounting and multi-window burn-rate decisions ' \
                      'from supplied counts; not a metrics store or alert pipeline.'
   spec.homepage = 'https://github.com/seuros/budget_machines'
   spec.license = 'MIT'
