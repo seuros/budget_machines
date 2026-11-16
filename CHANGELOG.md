@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.4](https://github.com/seuros/budget_machines/compare/budget_machines/v0.4.3...budget_machines/v0.4.4) (2026-11-16)
+
+
+### Bug Fixes
+
+* fix wrapped classes at load so building a value runs no Ruby ([0e1ee89](https://github.com/seuros/budget_machines/commit/0e1ee8914a28c20d1edc4bd613a17f8e79033c4d))
+
 ## [0.4.3](https://github.com/seuros/budget_machines/compare/budget_machines/v0.4.2...budget_machines/v0.4.3) (2026-11-16)
 
 
