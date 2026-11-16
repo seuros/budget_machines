@@ -37,14 +37,14 @@ checksum = "3ded4057c258ba199e2d26386d3af3780957ecaee6c4ef4041c6b4b8b97c0b06"
 
 [[package]]
 name = "budget-machines"
-version = "0.6.0"
+version = "0.6.1"
 dependencies = [
  "matryona-machines",
 ]
 
 [[package]]
 name = "budget_machines_native"
-version = "0.1.5"
+version = "0.1.6"
 dependencies = [
  "budget-machines",
  "magnus",

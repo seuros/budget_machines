@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.6.1](https://github.com/seuros/budget_machines/compare/budget-machines-v0.6.0...budget-machines-v0.6.1) (2026-11-16)
+
+
+### Bug Fixes
+
+* deny runtime indexing in the budget core and use matryona registry! ([7144843](https://github.com/seuros/budget_machines/commit/71448431417b61e69606e791738ff7747cc90c57))
+
 ## [0.6.0](https://github.com/seuros/budget_machines/compare/budget-machines-v0.5.0...budget-machines-v0.6.0) (2026-11-14)
 
 
